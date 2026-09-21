@@ -1,0 +1,6 @@
+{
+  "name": "BeepBox",
+  "description": "An online tool for sketching and sharing instrumental music and chiptune melodies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -587,8 +587,8 @@ export class ExportPrompt implements Prompt {
 							let pinTime: number = noteStartTime;
 							let pinSize: number = note.pins[0].size;
 							let pinInterval: number = note.pins[0].interval;
-							const prevPitches: number[] = [-1, -1, -1, -1];
-							const nextPitches: number[] = [-1, -1, -1, -1];
+							const prevPitches: number[] = Array(Config.maxChordSize).fill(-1);
+							const nextPitches: number[] = Array(Config.maxChordSize).fill(-1);
 							const toneCount: number = Math.min(polyphony, note.pitches.length);
 							const velocity: number = isDrumset ? Math.max(1, Math.round(defaultNoteVelocity * note.pins[0].size / Config.noteSizeMax)) : defaultNoteVelocity;
 							

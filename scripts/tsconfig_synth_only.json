@@ -17,6 +17,7 @@
 		"strictBindCallApply": true,
 		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true,
-		"noUnusedLocals": true
+		"noUnusedLocals": true,
+		"skipLibCheck": true
 	}
 }
