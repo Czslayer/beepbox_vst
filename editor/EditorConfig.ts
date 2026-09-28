@@ -1,6 +1,7 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
 import {DictionaryArray, BeepBoxOption, InstrumentType, toNameMap} from "../synth/SynthConfig.js";
+import {SoundFontRegistry} from "../synth/SoundFont.js";
 
 export interface PresetCategory extends BeepBoxOption {
 	readonly presets: DictionaryArray<Preset>;
@@ -35,6 +36,19 @@ export class EditorConfig {
 	public static readonly releaseNotesURL: string = "https://github.com/johnnesky/beepbox/releases/tag/v" + EditorConfig.version;
 	
 	public static readonly presetCategories: DictionaryArray<PresetCategory> = toNameMap([
+		{name: "DX7 FM Presets", presets: <DictionaryArray<Preset>> toNameMap([
+			{name: "DX7 E. PIANO 1",    midiProgram:   4, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":33,"transition":"normal","fadeInSeconds":0,"fadeOutTicks":48,"chord":"simultaneous","algorithm":"DX7 1: 6←5←4, 3←2←1","feedbackType":"1⟲","feedbackAmplitude":4,"operators":[{"frequency":"1×","amplitude":14},{"frequency":"1×","amplitude":7},{"frequency":"1×","amplitude":10},{"frequency":"1×","amplitude":14},{"frequency":"14×","amplitude":8},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"twang 2","index":1},{"target":"operatorAmplitude","envelope":"twang 3","index":4}]}},
+			{name: "DX7 E. PIANO 2",    midiProgram:   5, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":33,"transition":"normal","fadeInSeconds":0,"fadeOutTicks":48,"chord":"simultaneous","algorithm":"DX7 5: (5,6)←4, (2,3)←1","feedbackType":"1⟲","feedbackAmplitude":5,"operators":[{"frequency":"1×","amplitude":13},{"frequency":"1×","amplitude":8},{"frequency":"1×","amplitude":11},{"frequency":"14×","amplitude":9},{"frequency":"1×","amplitude":13},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"twang 2","index":1},{"target":"operatorAmplitude","envelope":"twang 2","index":3}]}},
+			{name: "DX7 BRASS 1",       midiProgram:  62, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":33,"transition":"normal","fadeInSeconds":0.02,"fadeOutTicks":24,"chord":"simultaneous","algorithm":"DX7 1: 6←5←4, 3←2←1","feedbackType":"1⟲","feedbackAmplitude":6,"operators":[{"frequency":"1×","amplitude":13},{"frequency":"1×","amplitude":11},{"frequency":"1×","amplitude":10},{"frequency":"1×","amplitude":13},{"frequency":"1×","amplitude":11},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"swell 1","index":1},{"target":"operatorAmplitude","envelope":"swell 1","index":4}]}},
+			{name: "DX7 BRASS 2",       midiProgram:  63, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":33,"transition":"normal","fadeInSeconds":0.02,"fadeOutTicks":24,"chord":"simultaneous","algorithm":"DX7 3: 6←5←(3,4), 2←1","feedbackType":"1⟲","feedbackAmplitude":5,"operators":[{"frequency":"1×","amplitude":14},{"frequency":"1×","amplitude":10},{"frequency":"1×","amplitude":12},{"frequency":"2×","amplitude":9},{"frequency":"1×","amplitude":11},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"swell 2","index":1}]}},
+			{name: "DX7 STRINGS 1",     midiProgram:  48, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["chorus & reverb"],"reverb":50,"transition":"cross fade","fadeInSeconds":0.05,"fadeOutTicks":48,"chord":"simultaneous","algorithm":"DX7 31: 6, 5, 4, 3, 2, 1","feedbackType":"1⟲ 2⟲ 3⟲ 4⟲","feedbackAmplitude":8,"operators":[{"frequency":"1×","amplitude":11},{"frequency":"~1×","amplitude":11},{"frequency":"2×","amplitude":9},{"frequency":"~2×","amplitude":9},{"frequency":"3×","amplitude":7},{"frequency":"~3×","amplitude":7}],"envelopes":[]}},
+			{name: "DX7 MARIMBA",       midiProgram:  12, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":20,"transition":"hard fade","chord":"simultaneous","algorithm":"DX7 17: 6←5←4, 3, 2, 1","feedbackType":"1⟲","feedbackAmplitude":2,"operators":[{"frequency":"1×","amplitude":12},{"frequency":"4×","amplitude":8},{"frequency":"13×","amplitude":7},{"frequency":"1×","amplitude":10},{"frequency":"1×","amplitude":0},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"twang 1","index":1},{"target":"operatorAmplitude","envelope":"twang 1","index":2}]}},
+			{name: "DX7 TUBULAR BELLS", midiProgram:  14, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":50,"transition":"hard fade","chord":"simultaneous","algorithm":"DX7 1: 6←5←4, 3←2←1","feedbackType":"1⟲","feedbackAmplitude":3,"operators":[{"frequency":"~1×","amplitude":12},{"frequency":"3×","amplitude":9},{"frequency":"11×","amplitude":8},{"frequency":"~1×","amplitude":10},{"frequency":"7×","amplitude":7},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"twang 3","index":1},{"target":"operatorAmplitude","envelope":"twang 2","index":2}]}},
+			{name: "DX7 SYN-BASS 1",    midiProgram:  38, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":20,"transition":"normal","fadeInSeconds":0,"fadeOutTicks":12,"chord":"simultaneous","algorithm":"DX7 1: 6←5←4, 3←2←1","feedbackType":"1⟲","feedbackAmplitude":8,"operators":[{"frequency":"1×","amplitude":15},{"frequency":"1×","amplitude":12},{"frequency":"1×","amplitude":10},{"frequency":"1×","amplitude":14},{"frequency":"2×","amplitude":11},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"twang 2","index":1},{"target":"operatorAmplitude","envelope":"twang 2","index":4}]}},
+			{name: "DX7 ORGAN 1",       midiProgram:  16, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["vibrato"],"vibrato":"light","transition":"normal","fadeInSeconds":0,"fadeOutTicks":-3,"chord":"simultaneous","algorithm":"DX7 32: 1 2 3 4 5 6 (all car)","feedbackType":"1⟲ 2⟲ 3⟲ 4⟲","feedbackAmplitude":4,"operators":[{"frequency":"1×","amplitude":14},{"frequency":"2×","amplitude":12},{"frequency":"3×","amplitude":10},{"frequency":"4×","amplitude":10},{"frequency":"6×","amplitude":8},{"frequency":"8×","amplitude":8}],"envelopes":[]}},
+			{name: "DX7 FLUTE",         midiProgram:  73, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["vibrato","reverb"],"vibrato":"delayed","reverb":33,"transition":"normal","fadeInSeconds":0.03,"fadeOutTicks":24,"chord":"simultaneous","algorithm":"DX7 13: 6←5←4←3←2←1","feedbackType":"1⟲","feedbackAmplitude":4,"operators":[{"frequency":"1×","amplitude":14},{"frequency":"1×","amplitude":7},{"frequency":"2×","amplitude":4},{"frequency":"1×","amplitude":0},{"frequency":"1×","amplitude":0},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"swell 1","index":1}]}},
+			{name: "DX7 CLAVINET",      midiProgram:   7, generalMidi: true, settings: {"type":"FM","eqFilter":[],"effects":["reverb"],"reverb":20,"transition":"normal","fadeInSeconds":0,"fadeOutTicks":12,"chord":"simultaneous","algorithm":"DX7 1: 6←5←4, 3←2←1","feedbackType":"1⟲","feedbackAmplitude":7,"operators":[{"frequency":"3×","amplitude":15},{"frequency":"~1×","amplitude":9},{"frequency":"8×","amplitude":6},{"frequency":"1×","amplitude":12},{"frequency":"2×","amplitude":8},{"frequency":"1×","amplitude":0}],"envelopes":[{"target":"operatorAmplitude","envelope":"twang 2","index":1}]}},
+		])},
 		{name: "Custom Instruments", presets: <DictionaryArray<Preset>> toNameMap([
 			{name: "chip wave",        customType: InstrumentType.chip},
 			{name: "FM (expert)",      customType: InstrumentType.fm},
@@ -45,6 +59,7 @@ export class EditorConfig {
 			{name: "pulse width",      customType: InstrumentType.pwm},
 			{name: "picked string",    customType: InstrumentType.pickedString},
 			{name: "supersaw",         customType: InstrumentType.supersaw},
+			{name: "soundfont",        customType: InstrumentType.soundfont},
 		])},
 		{name: "Retro Presets", presets: <DictionaryArray<Preset>> toNameMap([
 			{name: "square wave",      midiProgram:  80, settings: {"type":"chip","eqFilter":[],"effects":[],"transition":"interrupt","fadeInSeconds":0,"fadeOutTicks":-1,"chord":"arpeggio","wave":"square","unison":"none","envelopes":[]}},
@@ -256,10 +271,87 @@ export class EditorConfig {
 		])},
 	]);
 	
+	public static readonly builtInPresetCategoryCount: number = 17;
+
+	public static clearSoundFontPresets(): void {
+		if (EditorConfig.presetCategories.length > EditorConfig.builtInPresetCategoryCount) {
+			(<any>EditorConfig.presetCategories).length = EditorConfig.builtInPresetCategoryCount;
+			toNameMap(<any>EditorConfig.presetCategories);
+		}
+	}
+
+	public static addSoundFont(sf: any, synthMode: "soundfont" | "auto" | "harmonics" | "spectrum" | "pickedString" | "chip" = "soundfont"): {banksCount: number, presetsCount: number} {
+		if (!sf || !sf.presets || sf.presets.length === 0) return {banksCount: 0, presetsCount: 0};
+		
+		SoundFontRegistry.register(sf);
+
+		// Group presets by bank and drum type
+		const bankMap: Map<string, any[]> = new Map();
+		for (const preset of sf.presets) {
+			const isDrum = preset.isDrum || preset.bank === 128;
+			const bankKey = isDrum ? `drums_${preset.bank}` : `bank_${preset.bank}`;
+			if (!bankMap.has(bankKey)) {
+				bankMap.set(bankKey, []);
+			}
+			bankMap.get(bankKey)!.push(preset);
+		}
+
+		const sfName = sf.name && sf.name.trim().length > 0 ? sf.name.trim() : "SoundFont";
+		let banksCount = 0;
+		let presetsCount = 0;
+
+		for (const [bankKey, presetList] of bankMap.entries()) {
+			presetList.sort((a: any, b: any) => a.preset - b.preset);
+			const isDrum = bankKey.startsWith("drums_");
+			const rawBank = presetList[0].bank;
+			const bankTitle = isDrum ? `SF2: ${sfName} - Drums (Bank ${rawBank})` : `SF2: ${sfName} - Bank ${rawBank.toString().padStart(3, "0")}`;
+
+			// Split into chunks of max 60 presets to guarantee presetIndex <= 63 for 6-bit encoding
+			const chunkSize = 60;
+			for (let chunkStart = 0; chunkStart < presetList.length; chunkStart += chunkSize) {
+				const chunk = presetList.slice(chunkStart, chunkStart + chunkSize);
+				const categoryName = (presetList.length > chunkSize)
+					? `${bankTitle} (${chunkStart + 1}-${chunkStart + chunk.length})`
+					: bankTitle;
+
+				const categoryPresets: any[] = [];
+				for (const p of chunk) {
+					let instSettings: any;
+					if (synthMode === "soundfont") {
+						instSettings = p.toSoundFontInstrumentObject ? p.toSoundFontInstrumentObject() : p.toInstrumentObject("auto", isDrum);
+					} else {
+						instSettings = p.toInstrumentObject(synthMode, isDrum);
+					}
+					categoryPresets.push({
+						name: `${p.preset.toString().padStart(3, "0")} ${p.name}`,
+						isNoise: isDrum,
+						midiProgram: p.preset,
+						settings: instSettings,
+					});
+					presetsCount++;
+				}
+
+				const newCategory: any = {
+					name: categoryName,
+					presets: toNameMap(categoryPresets),
+					index: EditorConfig.presetCategories.length,
+				};
+				(<any>EditorConfig.presetCategories).push(newCategory);
+				banksCount++;
+			}
+		}
+
+		toNameMap(<any>EditorConfig.presetCategories);
+		return {banksCount, presetsCount};
+	}
+
 	public static valueToPreset(presetValue: number): Preset | null {
 		const categoryIndex: number = presetValue >> 6;
 		const presetIndex: number = presetValue & 0x3F;
-		return EditorConfig.presetCategories[categoryIndex].presets[presetIndex];
+		if (categoryIndex >= EditorConfig.presetCategories.length) return null;
+		const category = EditorConfig.presetCategories[categoryIndex];
+		if (!category || !category.presets || presetIndex >= category.presets.length) return null;
+		return category.presets[presetIndex];
 	}
 	
 	public static midiProgramToPresetValue(program: number): number | null {

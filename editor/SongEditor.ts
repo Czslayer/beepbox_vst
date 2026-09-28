@@ -1,6 +1,6 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
-import {InstrumentType, EffectType, Config, getPulseWidthRatio, effectsIncludeTransition, effectsIncludeChord, effectsIncludePitchShift, effectsIncludeDetune, effectsIncludeVibrato, effectsIncludeNoteFilter, effectsIncludeDistortion, effectsIncludeBitcrusher, effectsIncludePanning, effectsIncludeChorus, effectsIncludeEcho, effectsIncludeReverb} from "../synth/SynthConfig.js";
+import {InstrumentType, EffectType, Config, getPulseWidthRatio, effectsIncludeTransition, effectsIncludeChord, effectsIncludePitchShift, effectsIncludeDetune, effectsIncludeVibrato, effectsIncludeNoteFilter, effectsIncludeDistortion, effectsIncludeBitcrusher, effectsIncludePanning, effectsIncludeChorus, effectsIncludeEcho, effectsIncludeReverb, effectsIncludePhaser, effectsIncludeGain, effectsIncludeCompressor} from "../synth/SynthConfig.js";
 import {Preset, PresetCategory, EditorConfig, isMobile, isOnMac, ctrlSymbol, prettyNumber} from "./EditorConfig.js";
 import {ColorConfig, ChannelColors} from "./ColorConfig.js";
 import "./Layout.js"; // Imported here for the sake of ensuring this code is transpiled early.
@@ -33,10 +33,14 @@ import {SustainPrompt} from "./SustainPrompt.js";
 import {ChannelSettingsPrompt} from "./ChannelSettingsPrompt.js";
 import {ExportPrompt} from "./ExportPrompt.js";
 import {ImportPrompt} from "./ImportPrompt.js";
+import {SoundFontPrompt} from "./SoundFontPrompt.js";
 import {SongRecoveryPrompt} from "./SongRecoveryPrompt.js";
 import {RecordingSetupPrompt} from "./RecordingSetupPrompt.js";
+import {CustomPresetManager, CustomPreset} from "./CustomPresetManager.js";
+import {SaveCustomPresetPrompt} from "./SaveCustomPresetPrompt.js";
+import {ManageCustomPresetsPrompt} from "./ManageCustomPresetsPrompt.js";
 import {Change} from "./Change.js";
-import {ChangeTempo, ChangeChorus, ChangeEchoDelay, ChangeEchoSustain, ChangeReverb, ChangeVolume, ChangePan, ChangePatternSelection, ChangeSupersawDynamism, ChangeSupersawSpread, ChangeSupersawShape, ChangePulseWidth, ChangeFeedbackAmplitude, ChangeOperatorAmplitude, ChangeOperatorFrequency, ChangeDrumsetEnvelope, ChangePasteInstrument, ChangePreset, pickRandomPresetValue, ChangeRandomGeneratedInstrument, ChangeScale, ChangeDetectKey, ChangeKey, ChangeRhythm, ChangeFeedbackType, ChangeAlgorithm, ChangeCustomizeInstrument, ChangeChipWave, ChangeNoiseWave, ChangeTransition, ChangeToggleEffects, ChangeVibrato, ChangeUnison, ChangeChord, ChangeSong, ChangePitchShift, ChangeDetune, ChangeDistortion, ChangeStringSustain, ChangeBitcrusherFreq, ChangeBitcrusherQuantization, ChangeAddEnvelope, ChangeAddChannelInstrument, ChangeRemoveChannelInstrument} from "./changes.js";
+import {ChangeTempo, ChangeChorus, ChangeEchoDelay, ChangeEchoSustain, ChangeReverb, ChangeVolume, ChangePan, ChangePatternSelection, ChangeSupersawDynamism, ChangeSupersawSpread, ChangeSupersawShape, ChangePulseWidth, ChangeFeedbackAmplitude, ChangeOperatorAmplitude, ChangeOperatorFrequency, ChangeDrumsetEnvelope, ChangePasteInstrument, ChangePreset, pickRandomPresetValue, ChangeRandomGeneratedInstrument, ChangeScale, ChangeDetectKey, ChangeKey, ChangeRhythm, ChangeFeedbackType, ChangeAlgorithm, ChangeCustomizeInstrument, ChangeChipWave, ChangeNoiseWave, ChangeTransition, ChangeToggleEffects, ChangeVibrato, ChangeUnison, ChangeChord, ChangeSong, ChangePitchShift, ChangeDetune, ChangeDistortion, ChangeStringSustain, ChangeBitcrusherFreq, ChangeBitcrusherQuantization, ChangeAddEnvelope, ChangeAddChannelInstrument, ChangeRemoveChannelInstrument, ChangeVibratoDelay, ChangeVibratoDepth, ChangePhaser, ChangeGain, ChangeCompressor, ChangeLoadChannelPreset} from "./changes.js";
 
 const {a, button, div, input, select, span, optgroup, option} = HTML;
 
@@ -47,15 +51,27 @@ function buildOptions(menu: HTMLSelectElement, items: ReadonlyArray<string | num
 	return menu;
 }
 
-function buildPresetOptions(isNoise: boolean): HTMLSelectElement {
-	const menu: HTMLSelectElement = select();
+function populatePresetOptions(menu: HTMLSelectElement, isNoise: boolean): void {
+	while (menu.firstChild) menu.removeChild(menu.firstChild);
 	
 	menu.appendChild(optgroup({label: "Edit"},
 		option({value: "copyInstrument"}, "Copy Instrument (⇧C)"),
 		option({value: "pasteInstrument"}, "Paste Instrument (⇧V)"),
+		option({value: "saveCustomPreset"}, "Save Channel Preset..."),
+		option({value: "manageCustomPresets"}, "Manage Custom Presets..."),
 		option({value: "randomPreset"}, "Random Preset (R)"),
 		option({value: "randomGenerated"}, "Random Generated (⇧R)"),
 	));
+
+	const customPresets: CustomPreset[] = CustomPresetManager.getPresetsForChannel(isNoise);
+	if (customPresets.length > 0) {
+		const customGroup: HTMLElement = optgroup({label: "⭐ Saved Channel Presets"});
+		for (const p of customPresets) {
+			const instCountStr = p.instruments.length > 1 ? ` (${p.instruments.length} insts)` : "";
+			customGroup.appendChild(option({value: "customPreset_" + p.id}, p.name + instCountStr));
+		}
+		menu.appendChild(customGroup);
+	}
 	
 	// Show the "spectrum" custom type in both pitched and noise channels.
 	const customTypeGroup: HTMLElement = optgroup({label: EditorConfig.presetCategories[0].name});
@@ -63,6 +79,7 @@ function buildPresetOptions(isNoise: boolean): HTMLSelectElement {
 		customTypeGroup.appendChild(option({value: InstrumentType.noise}, EditorConfig.valueToPreset(InstrumentType.noise)!.name));
 		customTypeGroup.appendChild(option({value: InstrumentType.spectrum}, EditorConfig.valueToPreset(InstrumentType.spectrum)!.name));
 		customTypeGroup.appendChild(option({value: InstrumentType.drumset}, EditorConfig.valueToPreset(InstrumentType.drumset)!.name));
+		customTypeGroup.appendChild(option({value: InstrumentType.soundfont}, EditorConfig.valueToPreset(InstrumentType.soundfont)!.name));
 	} else {
 		customTypeGroup.appendChild(option({value: InstrumentType.chip}, EditorConfig.valueToPreset(InstrumentType.chip)!.name));
 		customTypeGroup.appendChild(option({value: InstrumentType.pwm}, EditorConfig.valueToPreset(InstrumentType.pwm)!.name));
@@ -71,6 +88,7 @@ function buildPresetOptions(isNoise: boolean): HTMLSelectElement {
 		customTypeGroup.appendChild(option({value: InstrumentType.pickedString}, EditorConfig.valueToPreset(InstrumentType.pickedString)!.name));
 		customTypeGroup.appendChild(option({value: InstrumentType.spectrum}, EditorConfig.valueToPreset(InstrumentType.spectrum)!.name));
 		customTypeGroup.appendChild(option({value: InstrumentType.fm}, EditorConfig.valueToPreset(InstrumentType.fm)!.name));
+		customTypeGroup.appendChild(option({value: InstrumentType.soundfont}, EditorConfig.valueToPreset(InstrumentType.soundfont)!.name));
 	}
 	menu.appendChild(customTypeGroup);
 	
@@ -87,6 +105,11 @@ function buildPresetOptions(isNoise: boolean): HTMLSelectElement {
 		}
 		if (foundAny) menu.appendChild(group);
 	}
+}
+
+function buildPresetOptions(isNoise: boolean): HTMLSelectElement {
+	const menu: HTMLSelectElement = select();
+	populatePresetOptions(menu, isNoise);
 	return menu;
 }
 
@@ -199,6 +222,7 @@ export class SongEditor {
 		option({selected: true, disabled: true, hidden: hideSelectMenuTitlesInOptions}, "File"),
 		option({value: "new"}, "+ New Blank Song"),
 		option({value: "import"}, "↑ Import Song... (" + ctrlSymbol + "O)"),
+		option({value: "soundfont"}, "↑ Import SoundFont (.sf2)..."),
 		option({value: "export"}, "↓ Export Song... (" + ctrlSymbol + "S)"),
 		option({value: "copyUrl"}, "⎘ Copy Song URL"),
 		option({value: "shareUrl"}, "⤳ Share Song URL"),
@@ -221,6 +245,7 @@ export class SongEditor {
 		option({value: "selectAll"}, "Select All (A)"),
 		option({value: "selectChannel"}, "Select Channel (⇧A)"),
 		option({value: "duplicatePatterns"}, "Duplicate Reused Patterns (D)"),
+		option({value: "duplicateOctaveDown"}, "Duplicate Notes 1 Octave Down (⇧D)"),
 		option({value: "transposeUp"}, "Move Notes Up (+ or ⇧+)"),
 		option({value: "transposeDown"}, "Move Notes Down (- or ⇧-)"),
 		option({value: "moveNotesSideways"}, "Move All Notes Sideways..."),
@@ -260,6 +285,7 @@ export class SongEditor {
 	private readonly _echoDelaySlider: Slider = new Slider(input({style: "margin: 0;", type: "range", min: "0", max: Config.echoDelayRange - 1, value: "0", step: "1"}), this.doc, (oldValue: number, newValue: number) => new ChangeEchoDelay(this.doc, oldValue, newValue));
 	private readonly _echoDelayRow: HTMLDivElement = div({class: "selectRow"}, span({class: "tip", onclick: ()=>this._openPrompt("echoDelay")}, "Echo Delay:"), this._echoDelaySlider.container);
 	private readonly _rhythmSelect: HTMLSelectElement = buildOptions(select(), Config.rhythms.map(rhythm=>rhythm.name));
+	private _lastPresetCategoryCount: number = EditorConfig.presetCategories.length;
 	private readonly _pitchedPresetSelect: HTMLSelectElement = buildPresetOptions(false);
 	private readonly _drumPresetSelect: HTMLSelectElement = buildPresetOptions(true);
 	private readonly _algorithmSelect: HTMLSelectElement = buildOptions(select(), Config.algorithms.map(algorithm=>algorithm.name));
@@ -319,6 +345,16 @@ export class SongEditor {
 	private readonly _chordSelectRow: HTMLElement = div({class: "selectRow"}, span({class: "tip", onclick: ()=>this._openPrompt("chords")}, "Chords:"), div({class: "selectContainer"}, this._chordSelect));
 	private readonly _vibratoSelect: HTMLSelectElement = buildOptions(select(), Config.vibratos.map(vibrato=>vibrato.name));
 	private readonly _vibratoSelectRow: HTMLElement = div({class: "selectRow"}, span({class: "tip", onclick: ()=>this._openPrompt("vibrato")}, "Vibrato:"), div({class: "selectContainer"}, this._vibratoSelect));
+	private readonly _vibratoDelaySlider: Slider = new Slider(input({style: "margin: 0;", type: "range", min: "0", max: "60", value: "0", step: "1"}), this.doc, (oldValue: number, newValue: number) => new ChangeVibratoDelay(this.doc, newValue));
+	private readonly _vibratoDelayRow: HTMLDivElement = div({class: "selectRow"}, span({class: "tip"}, "Vib Delay:"), this._vibratoDelaySlider.container);
+	private readonly _vibratoDepthSlider: Slider = new Slider(input({style: "margin: 0;", type: "range", min: "0", max: "100", value: "100", step: "1"}), this.doc, (oldValue: number, newValue: number) => new ChangeVibratoDepth(this.doc, newValue));
+	private readonly _vibratoDepthRow: HTMLDivElement = div({class: "selectRow"}, span({class: "tip"}, "Vib Depth:"), this._vibratoDepthSlider.container);
+	private readonly _phaserSlider: Slider = new Slider(input({style: "margin: 0;", type: "range", min: "0", max: "10", value: "5", step: "1"}), this.doc, (oldValue: number, newValue: number) => new ChangePhaser(this.doc, newValue));
+	private readonly _phaserRow: HTMLDivElement = div({class: "selectRow"}, span({class: "tip"}, "Phaser:"), this._phaserSlider.container);
+	private readonly _gainSlider: Slider = new Slider(input({style: "margin: 0;", type: "range", min: "0", max: "10", value: "5", step: "1"}), this.doc, (oldValue: number, newValue: number) => new ChangeGain(this.doc, newValue));
+	private readonly _gainRow: HTMLDivElement = div({class: "selectRow"}, span({class: "tip"}, "Gain:"), this._gainSlider.container);
+	private readonly _compressorSlider: Slider = new Slider(input({style: "margin: 0;", type: "range", min: "0", max: "10", value: "5", step: "1"}), this.doc, (oldValue: number, newValue: number) => new ChangeCompressor(this.doc, newValue));
+	private readonly _compressorRow: HTMLDivElement = div({class: "selectRow"}, span({class: "tip"}, "Compressor:"), this._compressorSlider.container);
 	private readonly _phaseModGroup: HTMLElement = div({class: "editor-controls"});
 	private readonly _feedbackTypeSelect: HTMLSelectElement = buildOptions(select(), Config.feedbacks.map(feedback=>feedback.name));
 	private readonly _feedbackRow1: HTMLDivElement = div({class: "selectRow"}, span({class: "tip", onclick: ()=>this._openPrompt("feedbackType")}, "Feedback:"), div({class: "selectContainer"}, this._feedbackTypeSelect));
@@ -334,8 +370,15 @@ export class SongEditor {
 	private readonly _customizeInstrumentButton: HTMLButtonElement = button({type: "button", class: "customize-instrument"},
 		"Customize Instrument",
 	);
+	private readonly _soundfontPresetLabel: HTMLSpanElement = span({style: "font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; color: var(--text-color-secondary, #aaa);"});
+	private readonly _soundfontBrowseButton: HTMLButtonElement = button({type: "button", style: "font-size: 11px; padding: 2px 6px; margin-left: 6px; cursor: pointer;"}, "SF2 Presets...");
+	private readonly _soundfontRow: HTMLDivElement = div({class: "selectRow", style: "display: none; align-items: center; justify-content: space-between;"},
+		span({class: "tip", onclick: ()=>this._openPrompt("soundfont")}, "SoundFont:"),
+		div({style: "display: flex; align-items: center; gap: 4px; overflow: hidden;"}, this._soundfontPresetLabel, this._soundfontBrowseButton)
+	);
 	private readonly _addEnvelopeButton: HTMLButtonElement = button({type: "button", class: "add-envelope"});
 	private readonly _customInstrumentSettingsGroup: HTMLDivElement = div({class: "editor-controls"},
+		this._soundfontRow,
 		this._eqFilterRow,
 		this._fadeInOutRow,
 		this._chipWaveSelectRow,
@@ -362,6 +405,11 @@ export class SongEditor {
 		this._pitchShiftRow,
 		this._detuneRow,
 		this._vibratoSelectRow,
+		this._vibratoDelayRow,
+		this._vibratoDepthRow,
+		this._phaserRow,
+		this._gainRow,
+		this._compressorRow,
 		this._noteFilterRow,
 		this._distortionRow,
 		this._bitcrusherQuantizationRow,
@@ -597,6 +645,7 @@ export class SongEditor {
 		this._instrumentCopyButton.addEventListener("click", this._copyInstrument);
 		this._instrumentPasteButton.addEventListener("click", this._pasteInstrument);
 		this._customizeInstrumentButton.addEventListener("click", this._whenCustomizePressed);
+		this._soundfontBrowseButton.addEventListener("click", () => this._openPrompt("soundfont"));
 		this._feedbackTypeSelect.addEventListener("change", this._whenSetFeedbackType);
 		this._chipWaveSelect.addEventListener("change", this._whenSetChipWave);
 		this._chipNoiseSelect.addEventListener("change", this._whenSetNoiseWave);
@@ -738,8 +787,17 @@ export class SongEditor {
 				case "import":
 					this.prompt = new ImportPrompt(this.doc);
 					break;
+				case "soundfont":
+					this.prompt = new SoundFontPrompt(this.doc);
+					break;
 				case "songRecovery":
 					this.prompt = new SongRecoveryPrompt(this.doc);
+					break;
+				case "saveCustomPreset":
+					this.prompt = new SaveCustomPresetPrompt(this.doc);
+					break;
+				case "manageCustomPresets":
+					this.prompt = new ManageCustomPresetsPrompt(this.doc);
 					break;
 				case "barCount":
 					this.prompt = new SongDurationPrompt(this.doc);
@@ -888,6 +946,12 @@ export class SongEditor {
 		this._tempoStepper.value = this.doc.song.tempo.toString();
 		setSelectedValue(this._rhythmSelect, this.doc.song.rhythm);
 		
+		if (this._lastPresetCategoryCount != EditorConfig.presetCategories.length) {
+			this._lastPresetCategoryCount = EditorConfig.presetCategories.length;
+			populatePresetOptions(this._pitchedPresetSelect, false);
+			populatePresetOptions(this._drumPresetSelect, true);
+		}
+
 		if (this.doc.song.getChannelIsNoise(this.doc.channel)) {
 			this._pitchedPresetSelect.style.display = "none";
 			this._drumPresetSelect.style.display = "";
@@ -911,6 +975,15 @@ export class SongEditor {
 			this._customizeInstrumentButton.style.display = "none";
 			this._customInstrumentSettingsGroup.style.display = "";
 			
+			if (instrument.type == InstrumentType.soundfont) {
+				this._soundfontRow.style.display = "";
+				const sfName = instrument.soundfontName || "SF2";
+				const bankProg = `[${instrument.soundfontBank.toString().padStart(3, "0")}:${instrument.soundfontProgram.toString().padStart(3, "0")}]`;
+				this._soundfontPresetLabel.textContent = `${sfName} ${bankProg}`;
+				this._soundfontPresetLabel.title = `${sfName} Bank ${instrument.soundfontBank} Program ${instrument.soundfontProgram}${instrument.soundfontIsDrum ? " (Drum)" : ""}`;
+			} else {
+				this._soundfontRow.style.display = "none";
+			}
 			if (instrument.type == InstrumentType.noise) {
 				this._chipNoiseSelectRow.style.display = "";
 				setSelectedValue(this._chipNoiseSelect, instrument.chipNoise);
@@ -1033,9 +1106,36 @@ export class SongEditor {
 			
 			if (effectsIncludeVibrato(instrument.effects)) {
 				this._vibratoSelectRow.style.display = "";
+				this._vibratoDelayRow.style.display = "";
+				this._vibratoDepthRow.style.display = "";
 				setSelectedValue(this._vibratoSelect, instrument.vibrato);
+				this._vibratoDelaySlider.updateValue(instrument.vibratoDelay);
+				this._vibratoDepthSlider.updateValue(instrument.vibratoDepth);
 			} else {
 				this._vibratoSelectRow.style.display = "none";
+				this._vibratoDelayRow.style.display = "none";
+				this._vibratoDepthRow.style.display = "none";
+			}
+
+			if (effectsIncludePhaser(instrument.effects)) {
+				this._phaserRow.style.display = "";
+				this._phaserSlider.updateValue(instrument.phaser);
+			} else {
+				this._phaserRow.style.display = "none";
+			}
+
+			if (effectsIncludeGain(instrument.effects)) {
+				this._gainRow.style.display = "";
+				this._gainSlider.updateValue(instrument.gain);
+			} else {
+				this._gainRow.style.display = "none";
+			}
+
+			if (effectsIncludeCompressor(instrument.effects)) {
+				this._compressorRow.style.display = "";
+				this._compressorSlider.updateValue(instrument.compressor);
+			} else {
+				this._compressorRow.style.display = "none";
 			}
 			
 			if (effectsIncludeNoteFilter(instrument.effects)) {
@@ -1435,7 +1535,10 @@ export class SongEditor {
 				break;
 			case 68: // d
 				if (canPlayNotes) break;
-				if (needControlForShortcuts == (event.ctrlKey || event.metaKey)) {
+				if (event.shiftKey) {
+					this.doc.selection.duplicateNotesOctaveDown();
+					event.preventDefault();
+				} else if (needControlForShortcuts == (event.ctrlKey || event.metaKey)) {
 					this.doc.selection.duplicatePatterns();
 					event.preventDefault();
 				}
@@ -1841,13 +1944,25 @@ export class SongEditor {
 	}
 	
 	private _setPreset(preset: string): void {
-		if (isNaN(<number> <unknown> preset)) {
+		if (preset.startsWith("customPreset_")) {
+			const presetId = preset.substring("customPreset_".length);
+			const customPreset = CustomPresetManager.getPresetById(presetId);
+			if (customPreset != null) {
+				this.doc.record(new ChangeLoadChannelPreset(this.doc, customPreset));
+			}
+		} else if (isNaN(<number> <unknown> preset)) {
 			switch (preset) {
 				case "copyInstrument":
 					this._copyInstrument();
 					break;
 				case "pasteInstrument":
 					this._pasteInstrument();
+					break;
+				case "saveCustomPreset":
+					this._openPrompt("saveCustomPreset");
+					break;
+				case "manageCustomPresets":
+					this._openPrompt("manageCustomPresets");
 					break;
 				case "randomPreset":
 					this._randomPreset();
@@ -1955,6 +2070,9 @@ export class SongEditor {
 			case "import":
 				this._openPrompt("import");
 				break;
+			case "soundfont":
+				this._openPrompt("soundfont");
+				break;
 			case "copyUrl":
 				this._copyTextToClipboard(new URL("#" + this.doc.song.toBase64String(), location.href).href);
 				break;
@@ -2027,6 +2145,9 @@ export class SongEditor {
 				break;
 			case "duplicatePatterns":
 				this.doc.selection.duplicatePatterns();
+				break;
+			case "duplicateOctaveDown":
+				this.doc.selection.duplicateNotesOctaveDown();
 				break;
 			case "barCount":
 				this._openPrompt("barCount");

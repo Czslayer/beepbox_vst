@@ -10,20 +10,22 @@ import {ChangeGroup} from "./Change.js";
 import {removeDuplicatePatterns, ChangeSong, ChangeReplacePatterns} from "./changes.js";
 import {AnalogousDrum, analogousDrumMap, MidiChunkType, MidiFileFormat, MidiEventType, MidiControlEventMessage, MidiMetaEventMessage, MidiRegisteredParameterNumberMSB, MidiRegisteredParameterNumberLSB, midiVolumeToVolumeMult, midiExpressionToVolumeMult} from "./Midi.js";
 import {ArrayBufferReader} from "./ArrayBufferReader.js";
+import {SoundFont} from "../synth/SoundFont.js";
+import {setCachedSoundFont} from "./SoundFontPrompt.js";
 
 const {button, p, div, h2, input} = HTML;
 
 export class ImportPrompt implements Prompt {
-	private readonly _fileInput: HTMLInputElement = input({type: "file", accept: ".json,application/json,.mid,.midi,audio/midi,audio/x-midi"});
+	private readonly _fileInput: HTMLInputElement = input({type: "file", accept: ".json,application/json,.mid,.midi,audio/midi,audio/x-midi,.sf2,audio/x-soundfont,application/x-soundfont"});
 	private readonly _cancelButton: HTMLButtonElement = button({class: "cancelButton"});
 	
-	public readonly container: HTMLDivElement = div({class: "prompt noSelection", style: "width: 300px;"},
+	public readonly container: HTMLDivElement = div({class: "prompt noSelection", style: "width: 320px;"},
 		h2("Import"),
 		p({style: "text-align: left; margin: 0.5em 0;"},
 			"BeepBox songs can be exported and re-imported as .json files. You could also use other means to make .json files for BeepBox as long as they follow the same structure.",
 		),
 		p({style: "text-align: left; margin: 0.5em 0;"},
-			"BeepBox can also (crudely) import .mid files. There are many tools available for creating .mid files. Shorter and simpler songs are more likely to work well.",
+			"BeepBox can also import .mid files and SoundFont 2 (.sf2) files to load custom synthesized instruments and drumsets.",
 		),
 		this._fileInput,
 		this._cancelButton,
@@ -65,6 +67,25 @@ export class ImportPrompt implements Prompt {
 				this._doc.prompt = null;
 				this._doc.goBackToStart();
 				this._parseMidiFile(<ArrayBuffer>reader.result);
+			});
+			reader.readAsArrayBuffer(file);
+		} else if (extension == "sf2") {
+			const reader: FileReader = new FileReader();
+			reader.addEventListener("load", (event: Event): void => {
+				try {
+					const soundFont = SoundFont.parse(<ArrayBuffer>reader.result);
+					if (soundFont.presets.length == 0) {
+						alert("No presets found in this SoundFont (.sf2) file.");
+						this._close();
+						return;
+					}
+					setCachedSoundFont(soundFont);
+					this._doc.openPrompt("soundfont");
+				} catch (err: any) {
+					console.error("Error parsing SoundFont (.sf2):", err);
+					alert("Failed to parse SoundFont (.sf2) file: " + (err.message || err));
+					this._close();
+				}
 			});
 			reader.readAsArrayBuffer(file);
 		} else {

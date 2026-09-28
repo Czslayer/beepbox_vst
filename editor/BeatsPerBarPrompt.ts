@@ -10,7 +10,7 @@ import {ColorConfig} from "./ColorConfig.js";
 const {button, div, span, h2, input, br, select, option} = HTML;
 
 export class BeatsPerBarPrompt implements Prompt {
-	private readonly _beatsStepper: HTMLInputElement = input({style: "width: 3em; margin-left: 1em;", type: "number", step: "1"});
+	private readonly _beatsInput: HTMLInputElement = input({style: "width: 8em; margin-left: 0.5em;", type: "text"});
 	private readonly _conversionStrategySelect: HTMLSelectElement = select({style: "width: 100%;"},
 		option({value: "splice"}, "Splice beats at end of bars."),
 		option({value: "stretch"}, "Stretch notes to fit in bars."),
@@ -19,42 +19,42 @@ export class BeatsPerBarPrompt implements Prompt {
 	private readonly _cancelButton: HTMLButtonElement = button({class: "cancelButton"});
 	private readonly _okayButton: HTMLButtonElement = button({class: "okayButton", style: "width:45%;"}, "Okay");
 	
-	public readonly container: HTMLDivElement = div({class: "prompt noSelection", style: "width: 250px;"},
-		h2("Beats Per Bar"),
-		div({style: "display: flex; flex-direction: row; align-items: center; height: 2em; justify-content: flex-end;"},
+	public readonly container: HTMLDivElement = div({class: "prompt noSelection", style: "width: 280px;"},
+		h2("Beats Per Bar & Time Signatures"),
+		div({style: "display: flex; flex-direction: row; align-items: center; height: 2.5em; justify-content: flex-end;"},
 			div({style: "text-align: right;"},
-				"Beats per bar:",
+				"Beats pattern:",
 				br(),
-				span({style: `font-size: smaller; color: ${ColorConfig.secondaryText};`}, "(Multiples of 3 or 4 are recommended)"),
+				span({style: `font-size: smaller; color: ${ColorConfig.secondaryText};`}, "EX: '4' or '4, 4, 9' (2 bars of 4, 1 bar of 9)"),
 			),
-			this._beatsStepper,
+			this._beatsInput,
 		),
-		div({style: "display: flex; flex-direction: row; align-items: center; height: 2em; justify-content: flex-end;"},
+		div({style: "display: flex; flex-direction: row; align-items: center; height: 2em; justify-content: flex-end; margin-top: 0.5em;"},
 			div({class: "selectContainer", style: "width: 100%;"}, this._conversionStrategySelect),
 		),
-		div({style: "display: flex; flex-direction: row-reverse; justify-content: space-between;"},
+		div({style: "display: flex; flex-direction: row-reverse; justify-content: space-between; margin-top: 0.5em;"},
 			this._okayButton,
 		),
 		this._cancelButton,
 	);
 	
 	constructor(private _doc: SongDocument) {
-		this._beatsStepper.value = this._doc.song.beatsPerBar + "";
-		this._beatsStepper.min = Config.beatsPerBarMin + "";
-		this._beatsStepper.max = Config.beatsPerBarMax + "";
+		if (this._doc.song.barBeats && this._doc.song.barBeats.length > 0) {
+			this._beatsInput.value = this._doc.song.barBeats.join(", ");
+		} else {
+			this._beatsInput.value = this._doc.song.beatsPerBar + "";
+		}
 		
 		const lastStrategy: string | null = window.localStorage.getItem("beatCountStrategy");
 		if (lastStrategy != null) {
 			this._conversionStrategySelect.value = lastStrategy;
 		}
 		
-		this._beatsStepper.select();
-		setTimeout(()=>this._beatsStepper.focus());
+		this._beatsInput.select();
+		setTimeout(()=>this._beatsInput.focus());
 		
 		this._okayButton.addEventListener("click", this._saveChanges);
 		this._cancelButton.addEventListener("click", this._close);
-		this._beatsStepper.addEventListener("keypress", BeatsPerBarPrompt._validateKey);
-		this._beatsStepper.addEventListener("blur", BeatsPerBarPrompt._validateNumber);
 		this.container.addEventListener("keydown", this._whenKeyPressed);
 	}
 	
@@ -65,8 +65,6 @@ export class BeatsPerBarPrompt implements Prompt {
 	public cleanUp = (): void => { 
 		this._okayButton.removeEventListener("click", this._saveChanges);
 		this._cancelButton.removeEventListener("click", this._close);
-		this._beatsStepper.removeEventListener("keypress", BeatsPerBarPrompt._validateKey);
-		this._beatsStepper.removeEventListener("blur", BeatsPerBarPrompt._validateNumber);
 		this.container.removeEventListener("keydown", this._whenKeyPressed);
 	}
 	
@@ -76,27 +74,18 @@ export class BeatsPerBarPrompt implements Prompt {
 		}
 	}
 	
-	private static _validateKey(event: KeyboardEvent): boolean {
-		const charCode = (event.which) ? event.which : event.keyCode;
-		if (charCode != 46 && charCode > 31 && (charCode < 48 || charCode > 57)) {
-			event.preventDefault();
-			return true;
-		}
-		return false;
-	}
-	
-	private static _validateNumber(event: Event): void {
-		const input: HTMLInputElement = <HTMLInputElement>event.target;
-		input.value = String(BeatsPerBarPrompt._validate(input));
-	}
-	
-	private static _validate(input: HTMLInputElement): number {
-		return Math.floor(Math.max(Number(input.min), Math.min(Number(input.max), Number(input.value))));
-	}
-	
 	private _saveChanges = (): void => {
 		window.localStorage.setItem("beatCountStrategy", this._conversionStrategySelect.value);
 		this._doc.prompt = null;
-		this._doc.record(new ChangeBeatsPerBar(this._doc, BeatsPerBarPrompt._validate(this._beatsStepper), this._conversionStrategySelect.value), true);
+		const rawVal = this._beatsInput.value.trim();
+		const parts = rawVal.split(/[\s,]+/).map(x => parseInt(x, 10)).filter(x => !isNaN(x) && x >= Config.beatsPerBarMin && x <= Config.beatsPerBarMax);
+		if (parts.length > 1) {
+			this._doc.song.barBeats = parts;
+			this._doc.record(new ChangeBeatsPerBar(this._doc, parts[0], this._conversionStrategySelect.value), true);
+		} else {
+			const singleVal = parts.length === 1 ? parts[0] : Math.floor(Math.max(Config.beatsPerBarMin, Math.min(Config.beatsPerBarMax, Number(rawVal) || 8)));
+			this._doc.song.barBeats = [];
+			this._doc.record(new ChangeBeatsPerBar(this._doc, singleVal, this._conversionStrategySelect.value), true);
+		}
 	}
 }

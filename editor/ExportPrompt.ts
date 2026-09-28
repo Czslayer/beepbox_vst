@@ -522,6 +522,8 @@ export class ExportPrompt implements Prompt {
 									instrumentProgram = 81; // sawtooth
 								} else if (instrument.type == InstrumentType.pickedString) {
 									instrumentProgram = 0x19; // steel guitar
+								} else if (instrument.type == InstrumentType.soundfont) {
+									instrumentProgram = instrument.soundfontProgram & 0x7f;
 								} else {
 									throw new Error("Unrecognized instrument type.");
 								}

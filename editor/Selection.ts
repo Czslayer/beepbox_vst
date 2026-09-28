@@ -4,7 +4,7 @@ import {Dictionary, Config} from "../synth/SynthConfig.js";
 import {Note, Pattern, Channel} from "../synth/synth.js";
 import {SongDocument} from "./SongDocument.js";
 import {ChangeGroup} from "./Change.js";
-import {ChangeTrackSelection, ChangeChannelBar, ChangeDuplicateSelectedReusedPatterns, ChangeNoteAdded, ChangeNoteTruncate, ChangePatternNumbers, ChangePatternSelection, ChangeInsertBars, ChangeAddChannel, ChangeDeleteBars, ChangeRemoveChannel, ChangeEnsurePatternExists, ChangeNoteLength, ChangePaste, ChangeSetPatternInstruments, ChangeViewInstrument, ChangePatternsPerChannel, ChangePatternRhythm, ChangePatternScale, ChangeTranspose, ChangeChannelOrder, comparePatternNotes, unionOfUsedNotes, generateScaleMap, discardInvalidPatternInstruments, patternsContainSameInstruments} from "./changes.js";
+import {ChangeTrackSelection, ChangeChannelBar, ChangeDuplicateSelectedReusedPatterns, ChangeNoteAdded, ChangeNoteTruncate, ChangePatternNumbers, ChangePatternSelection, ChangeInsertBars, ChangeAddChannel, ChangeDeleteBars, ChangeRemoveChannel, ChangeEnsurePatternExists, ChangeNoteLength, ChangePaste, ChangeSetPatternInstruments, ChangeViewInstrument, ChangePatternsPerChannel, ChangePatternRhythm, ChangePatternScale, ChangeTranspose, ChangeChannelOrder, ChangeDuplicateNotesOctaveDownPattern, comparePatternNotes, unionOfUsedNotes, generateScaleMap, discardInvalidPatternInstruments, patternsContainSameInstruments} from "./changes.js";
 
 interface PatternCopy {
 	instruments: number[];
@@ -635,6 +635,17 @@ export class Selection {
 		}
 	}
 	
+	public duplicateNotesOctaveDown(): void {
+		const change = new ChangeGroup();
+		for (const channelIndex of this._eachSelectedChannel()) {
+			if (this._doc.song.getChannelIsNoise(channelIndex)) continue;
+			for (const pattern of this._eachSelectedPattern(channelIndex)) {
+				change.append(new ChangeDuplicateNotesOctaveDownPattern(this._doc, pattern));
+			}
+		}
+		this._doc.record(change);
+	}
+
 	public transpose(upward: boolean, octave: boolean): void {
 		const canReplaceLastChange: boolean = this._doc.lastChangeWas(this._changeTranspose);
 		this._changeTranspose = new ChangeGroup();

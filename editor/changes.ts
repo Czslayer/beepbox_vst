@@ -3,6 +3,7 @@
 import {Algorithm, Dictionary, FilterType, SustainType, InstrumentType, EffectType, AutomationTarget, Config, effectsIncludePanning, effectsIncludeDistortion} from "../synth/SynthConfig.js";
 import {NotePin, Note, makeNotePin, Pattern, FilterSettings, FilterControlPoint, SpectrumWave, HarmonicsWave, Instrument, Channel, Song, Synth} from "../synth/synth.js";
 import {Preset, PresetCategory, EditorConfig} from "./EditorConfig.js";
+import {CustomPreset} from "./CustomPresetManager.js";
 import {Change, ChangeGroup, ChangeSequence, UndoableChange} from "./Change.js";
 import {SongDocument} from "./SongDocument.js";
 
@@ -444,6 +445,47 @@ export class ChangePreset extends Change {
 			doc.notifier.changed();
 			this._didSomething();
 		}
+	}
+}
+
+export class ChangeLoadChannelPreset extends Change {
+	constructor(doc: SongDocument, preset: CustomPreset) {
+		super();
+		const channel: Channel = doc.song.channels[doc.channel];
+		const isNoise: boolean = doc.song.getChannelIsNoise(doc.channel);
+		const instDataArray: any[] = preset.instruments.slice(0, 4); // Max 4 simultaneous instruments per channel preset
+		
+		if (instDataArray.length === 0) return;
+
+		channel.instruments.length = 0;
+		for (let i: number = 0; i < instDataArray.length; i++) {
+			const inst: Instrument = new Instrument(isNoise);
+			inst.fromJsonObject(instDataArray[i], isNoise, 1);
+			inst.preset = inst.type;
+			channel.instruments.push(inst);
+		}
+
+		if (instDataArray.length > 1) {
+			doc.song.layeredInstruments = true;
+		}
+
+		if (doc.song.patternInstruments) {
+			for (const pattern of channel.patterns) {
+				for (let i = 0; i < pattern.instruments.length; i++) {
+					if (pattern.instruments[i] >= channel.instruments.length) {
+						pattern.instruments[i] = 0;
+					}
+				}
+				if (pattern.instruments.length === 0) {
+					pattern.instruments.length = 0;
+					pattern.instruments.push(0);
+				}
+			}
+		}
+
+		doc.viewedInstrument[doc.channel] = 0;
+		doc.notifier.changed();
+		this._didSomething();
 	}
 }
 
@@ -3300,6 +3342,109 @@ export class ChangeSetEnvelopeType extends Change {
 		const oldValue: number = instrument.envelopes[envelopeIndex].envelope;
 		if (oldValue != newValue) {
 			instrument.envelopes[envelopeIndex].envelope = newValue;
+			instrument.preset = instrument.type;
+			doc.notifier.changed();
+			this._didSomething();
+		}
+	}
+}
+
+export class ChangeDuplicateNotesOctaveDownPattern extends UndoableChange {
+	private _doc: SongDocument;
+	private _pattern: Pattern;
+	private _oldNotes: Note[];
+	private _newNotes: Note[];
+
+	constructor(doc: SongDocument, pattern: Pattern) {
+		super(false);
+		this._doc = doc;
+		this._pattern = pattern;
+		this._oldNotes = pattern.cloneNotes();
+
+		const newNoteList: Note[] = [];
+		for (const note of pattern.notes) {
+			newNoteList.push(note);
+			const dupPitches = note.pitches.map((p: number) => Math.max(0, p - 12));
+			const dupNote = new Note(dupPitches[0], note.start, note.end, note.pins[0].size, false);
+			dupNote.pitches = dupPitches;
+			dupNote.pins = note.pins.map((p: any) => ({...p}));
+			dupNote.continuesLastPattern = note.continuesLastPattern;
+			newNoteList.push(dupNote);
+		}
+		pattern.notes = newNoteList;
+		this._newNotes = pattern.cloneNotes();
+		this._didSomething();
+	}
+
+	protected _doForwards(): void {
+		this._pattern.notes = this._newNotes.map((n: Note) => n.clone());
+		this._doc.notifier.changed();
+	}
+
+	protected _doBackwards(): void {
+		this._pattern.notes = this._oldNotes.map((n: Note) => n.clone());
+		this._doc.notifier.changed();
+	}
+}
+
+export class ChangeVibratoDelay extends Change {
+	constructor(doc: SongDocument, newValue: number) {
+		super();
+		const instrument: Instrument = doc.song.channels[doc.channel].instruments[doc.getCurrentInstrument()];
+		if (instrument.vibratoDelay != newValue) {
+			instrument.vibratoDelay = newValue;
+			instrument.preset = instrument.type;
+			doc.notifier.changed();
+			this._didSomething();
+		}
+	}
+}
+
+export class ChangeVibratoDepth extends Change {
+	constructor(doc: SongDocument, newValue: number) {
+		super();
+		const instrument: Instrument = doc.song.channels[doc.channel].instruments[doc.getCurrentInstrument()];
+		if (instrument.vibratoDepth != newValue) {
+			instrument.vibratoDepth = newValue;
+			instrument.preset = instrument.type;
+			doc.notifier.changed();
+			this._didSomething();
+		}
+	}
+}
+
+export class ChangePhaser extends Change {
+	constructor(doc: SongDocument, newValue: number) {
+		super();
+		const instrument: Instrument = doc.song.channels[doc.channel].instruments[doc.getCurrentInstrument()];
+		if (instrument.phaser != newValue) {
+			instrument.phaser = newValue;
+			instrument.preset = instrument.type;
+			doc.notifier.changed();
+			this._didSomething();
+		}
+	}
+}
+
+export class ChangeGain extends Change {
+	constructor(doc: SongDocument, newValue: number) {
+		super();
+		const instrument: Instrument = doc.song.channels[doc.channel].instruments[doc.getCurrentInstrument()];
+		if (instrument.gain != newValue) {
+			instrument.gain = newValue;
+			instrument.preset = instrument.type;
+			doc.notifier.changed();
+			this._didSomething();
+		}
+	}
+}
+
+export class ChangeCompressor extends Change {
+	constructor(doc: SongDocument, newValue: number) {
+		super();
+		const instrument: Instrument = doc.song.channels[doc.channel].instruments[doc.getCurrentInstrument()];
+		if (instrument.compressor != newValue) {
+			instrument.compressor = newValue;
 			instrument.preset = instrument.type;
 			doc.notifier.changed();
 			this._didSomething();

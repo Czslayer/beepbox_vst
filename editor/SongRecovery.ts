@@ -36,8 +36,13 @@ export function generateUid(): string {
 }
 
 export function errorAlert(error: any): void {
-	console.warn(error);
-	window.alert("Whoops, the song data appears to have been corrupted! Please try to recover the last working version of the song from the \"Recover Recent Song...\" option in BeepBox's \"File\" menu.");
+	console.error("[Corrupted Song Data Detailed Error]:", {
+		message: error?.message || String(error),
+		stack: error?.stack,
+		rawError: error
+	});
+	console.warn("Song data corruption details: " + (error?.message || error));
+	window.alert("Whoops, the song data appears to have been corrupted!\n\nDetails: " + (error?.message || error) + "\n\nPlease try to recover the last working version of the song from the \"Recover Recent Song...\" option in BeepBox's \"File\" menu.");
 }
 
 function compareSongs(a: RecoveredSong, b: RecoveredSong): number {

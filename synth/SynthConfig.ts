@@ -63,6 +63,7 @@ export const enum InstrumentType {
 	pwm,
 	pickedString,
 	supersaw,
+	soundfont,
 	length,
 }
 
@@ -79,6 +80,9 @@ export const enum EffectType {
 	vibrato,
 	transition,
 	chord,
+	phaser,
+	gain,
+	compressor,
 	// If you add more, you'll also have to extend the bitfield used in Base64 which currently uses two six-bit characters.
 	length,
 }
@@ -263,7 +267,7 @@ export class Config {
 	public static readonly beatsPerBarMin: number = 3;
 	public static readonly beatsPerBarMax: number = 16;
 	public static readonly barCountMin: number = 1;
-	public static readonly barCountMax: number = 128;
+	public static readonly barCountMax: number = 1028;
 	public static readonly instrumentCountMin: number = 1;
 	public static readonly layeredInstrumentCountMax: number = 4;
 	public static readonly patternInstrumentCountMax: number = 10;
@@ -277,8 +281,8 @@ export class Config {
 		{name: "freehand",      stepsPerBeat:24, ticksPerArpeggio: 3, arpeggioPatterns: [[0], [0, 1],       [0, 1, 2, 1]], roundUpThresholds: null},
 	]);
 	
-	public static readonly instrumentTypeNames: ReadonlyArray<string> = ["chip", "FM", "noise", "spectrum", "drumset", "harmonics", "PWM", "Picked String", "supersaw"]; // See InstrumentType enum above.
-	public static readonly instrumentTypeHasSpecialInterval: ReadonlyArray<boolean> = [true, true, false, false, false, true, false, false, false];
+	public static readonly instrumentTypeNames: ReadonlyArray<string> = ["chip", "FM", "noise", "spectrum", "drumset", "harmonics", "PWM", "Picked String", "supersaw", "soundfont"]; // See InstrumentType enum above.
+	public static readonly instrumentTypeHasSpecialInterval: ReadonlyArray<boolean> = [true, true, false, false, false, true, false, false, false, false];
 	public static readonly chipBaseExpression:      number = 0.03375; // Doubled by unison feature, but affected by expression adjustments per unison setting and wave shape.
 	public static readonly fmBaseExpression:        number = 0.03;
 	public static readonly noiseBaseExpression:     number = 0.19;
@@ -288,6 +292,7 @@ export class Config {
 	public static readonly pwmBaseExpression:       number = 0.04725; // It's actually closer to half of this, the synthesized pulse amplitude range is only .5 to -.5, but also note that the fundamental sine partial amplitude of a square wave is 4/π times the measured square wave amplitude.
 	public static readonly supersawBaseExpression:  number = 0.061425; // It's actually closer to half of this, the synthesized sawtooth amplitude range is only .5 to -.5.
 	public static readonly pickedStringBaseExpression: number = 0.025; // Same as harmonics.
+	public static readonly soundfontBaseExpression: number = 0.045; // Real SF2 PCM sample playback.
 	public static readonly distortionBaseVolume:    number = 0.011; // Distortion is not affected by pitchDamping, which otherwise approximately halves expression for notes around the middle of the range.
 	public static readonly bitcrusherBaseVolume:    number = 0.010; // Also not affected by pitchDamping, used when bit crushing is maxed out (aka "1-bit" output).
 	
@@ -353,8 +358,8 @@ export class Config {
 		{name: "bowed",      voices: 2, spread: 0.02, offset: 0.0, expression: 1.0, sign:-1.0},
 		{name: "piano",      voices: 2, spread: 0.01, offset: 0.0, expression: 1.0, sign: 0.7},
 	]);
-	public static readonly effectNames: ReadonlyArray<string> = ["reverb", "chorus", "panning", "distortion", "bitcrusher", "note filter", "echo", "pitch shift", "detune", "vibrato", "transition type", "chord type"];
-	public static readonly effectOrder: ReadonlyArray<EffectType> = [EffectType.transition, EffectType.chord, EffectType.pitchShift, EffectType.detune, EffectType.vibrato, EffectType.noteFilter, EffectType.distortion, EffectType.bitcrusher, EffectType.panning, EffectType.chorus, EffectType.echo, EffectType.reverb];
+	public static readonly effectNames: ReadonlyArray<string> = ["reverb", "chorus", "panning", "distortion", "bitcrusher", "note filter", "echo", "pitch shift", "detune", "vibrato", "transition type", "chord type", "phaser", "gain", "compressor"];
+	public static readonly effectOrder: ReadonlyArray<EffectType> = [EffectType.transition, EffectType.chord, EffectType.pitchShift, EffectType.detune, EffectType.vibrato, EffectType.noteFilter, EffectType.distortion, EffectType.bitcrusher, EffectType.phaser, EffectType.gain, EffectType.compressor, EffectType.panning, EffectType.chorus, EffectType.echo, EffectType.reverb];
 	public static readonly noteSizeMax: number = 3;
 	public static readonly volumeRange: number = 8;
 	public static readonly volumeLogScale: number = -0.5;
@@ -731,4 +736,13 @@ export function effectsIncludeEcho(effects: number): boolean {
 }
 export function effectsIncludeReverb(effects: number): boolean {
 	return (effects & (1 << EffectType.reverb)) != 0;
+}
+export function effectsIncludePhaser(effects: number): boolean {
+	return (effects & (1 << EffectType.phaser)) != 0;
+}
+export function effectsIncludeGain(effects: number): boolean {
+	return (effects & (1 << EffectType.gain)) != 0;
+}
+export function effectsIncludeCompressor(effects: number): boolean {
+	return (effects & (1 << EffectType.compressor)) != 0;
 }

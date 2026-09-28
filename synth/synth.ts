@@ -1,9 +1,10 @@
 // Copyright (c) John Nesky and contributing authors, distributed under the MIT license, see accompanying the LICENSE.md file.
 
-import {Dictionary, DictionaryArray, FilterType, SustainType, EnvelopeType, InstrumentType, EffectType, EnvelopeComputeIndex, Transition, Unison, Chord, Vibrato, Envelope, AutomationTarget, Config, getDrumWave, drawNoiseSpectrum, getArpeggioPitchIndex, performIntegral, getPulseWidthRatio, effectsIncludeTransition, effectsIncludeChord, effectsIncludePitchShift, effectsIncludeDetune, effectsIncludeVibrato, effectsIncludeNoteFilter, effectsIncludeDistortion, effectsIncludeBitcrusher, effectsIncludePanning, effectsIncludeChorus, effectsIncludeEcho, effectsIncludeReverb} from "./SynthConfig.js";
+import {Dictionary, DictionaryArray, FilterType, SustainType, EnvelopeType, InstrumentType, EffectType, EnvelopeComputeIndex, Transition, Unison, Chord, Vibrato, Envelope, AutomationTarget, Config, getDrumWave, drawNoiseSpectrum, getArpeggioPitchIndex, performIntegral, getPulseWidthRatio, effectsIncludeTransition, effectsIncludeChord, effectsIncludePitchShift, effectsIncludeDetune, effectsIncludeVibrato, effectsIncludeNoteFilter, effectsIncludeDistortion, effectsIncludeBitcrusher, effectsIncludePanning, effectsIncludeChorus, effectsIncludeEcho, effectsIncludeReverb, effectsIncludePhaser, effectsIncludeGain, effectsIncludeCompressor} from "./SynthConfig.js";
 import {scaleElementsByFactor, fastFourierTransform, forwardRealFourierTransform, inverseRealFourierTransform} from "./FFT.js";
 import {Deque} from "./Deque.js";
 import {FilterCoefficients, FrequencyResponse, DynamicBiquadFilter, warpInfinityToNyquist} from "./filtering.js";
+import {SoundFontRegistry, SoundFontPreset} from "./SoundFont.js";
 
 declare global {
 	interface Window {
@@ -145,7 +146,7 @@ const enum SongTagCode {
 //	                    = CharCode.G, // added in JummBox URL version 3 for arpeggioSpeed, DEPRECATED
 	harmonics           = CharCode.H, // added in BeepBox URL version 7
 	stringSustain       = CharCode.I, // added in BeepBox URL version 9
-//	                    = CharCode.J,
+	soundfont           = CharCode.J, // added for SoundFont
 //	                    = CharCode.K,
 	pan                 = CharCode.L, // added between 8 and 9, DEPRECATED
 //	                    = CharCode.M, // added in JummBox URL version 1(?) for customChipWave
@@ -1011,6 +1012,11 @@ export class Instrument {
 	public pitchShift: number = 0;
 	public detune: number = 0;
 	public vibrato: number = 0;
+	public vibratoDelay: number = 0;
+	public vibratoDepth: number = 100;
+	public phaser: number = 5;
+	public gain: number = 5;
+	public compressor: number = 5;
 	public unison: number = 0;
 	public effects: number = 0;
 	public chord: number = 1;
@@ -1037,6 +1043,10 @@ export class Instrument {
 	public readonly harmonicsWave: HarmonicsWave = new HarmonicsWave();
 	public readonly drumsetEnvelopes: number[] = [];
 	public readonly drumsetSpectrumWaves: SpectrumWave[] = [];
+	public soundfontName: string = "";
+	public soundfontBank: number = 0;
+	public soundfontProgram: number = 0;
+	public soundfontIsDrum: boolean = false;
 	
 	constructor(isNoiseChannel: boolean) {
 		this.spectrumWave = new SpectrumWave(isNoiseChannel);
@@ -1122,6 +1132,12 @@ export class Instrument {
 				this.supersawSpread = Math.ceil(Config.supersawSpreadMax / 2.0);
 				this.supersawShape = 0;
 				this.pulseWidth = Config.pulseWidthRange - 1;
+				break;
+			case InstrumentType.soundfont:
+				this.chord = Config.chords.dictionary["simultaneous"].index;
+				this.soundfontBank = 0;
+				this.soundfontProgram = 0;
+				this.soundfontIsDrum = isNoiseChannel;
 				break;
 			default:
 				throw new Error("Unrecognized instrument type: " + type);
@@ -1246,6 +1262,17 @@ export class Instrument {
 		}
 		if (effectsIncludeVibrato(this.effects)) {
 			instrumentObject["vibrato"] = Config.vibratos[this.vibrato].name;
+			instrumentObject["vibratoDelay"] = this.vibratoDelay;
+			instrumentObject["vibratoDepth"] = this.vibratoDepth;
+		}
+		if (effectsIncludePhaser(this.effects)) {
+			instrumentObject["phaser"] = this.phaser;
+		}
+		if (effectsIncludeGain(this.effects)) {
+			instrumentObject["gain"] = this.gain;
+		}
+		if (effectsIncludeCompressor(this.effects)) {
+			instrumentObject["compressor"] = this.compressor;
 		}
 		if (effectsIncludeNoteFilter(this.effects)) {
 			instrumentObject["noteFilter"] = this.noteFilter.toJsonObject();
@@ -1332,6 +1359,11 @@ export class Instrument {
 			instrumentObject["feedbackType"] = Config.feedbacks[this.feedbackType].name;
 			instrumentObject["feedbackAmplitude"] = this.feedbackAmplitude;
 			instrumentObject["operators"] = operatorArray;
+		} else if (this.type == InstrumentType.soundfont) {
+			instrumentObject["soundfontName"] = this.soundfontName;
+			instrumentObject["soundfontBank"] = this.soundfontBank;
+			instrumentObject["soundfontProgram"] = this.soundfontProgram;
+			instrumentObject["soundfontIsDrum"] = this.soundfontIsDrum;
 		} else {
 			throw new Error("Unrecognized instrument type");
 		}
@@ -1477,6 +1509,22 @@ export class Instrument {
 			if (vibrato != Config.vibratos.dictionary["none"]) {
 				this.effects = (this.effects | (1 << EffectType.vibrato));
 			}
+		}
+		
+		if (instrumentObject["vibratoDelay"] != undefined) {
+			this.vibratoDelay = clamp(0, 60, instrumentObject["vibratoDelay"] | 0);
+		}
+		if (instrumentObject["vibratoDepth"] != undefined) {
+			this.vibratoDepth = clamp(0, 100, instrumentObject["vibratoDepth"] | 0);
+		}
+		if (instrumentObject["phaser"] != undefined) {
+			this.phaser = clamp(0, 10, instrumentObject["phaser"] | 0);
+		}
+		if (instrumentObject["gain"] != undefined) {
+			this.gain = clamp(0, 10, instrumentObject["gain"] | 0);
+		}
+		if (instrumentObject["compressor"] != undefined) {
+			this.compressor = clamp(0, 10, instrumentObject["compressor"] | 0);
 		}
 		
 		if (instrumentObject["pan"] != undefined) {
@@ -1633,6 +1681,13 @@ export class Instrument {
 			}
 		}
 		
+		if (this.type == InstrumentType.soundfont) {
+			if (instrumentObject["soundfontName"] != undefined) this.soundfontName = String(instrumentObject["soundfontName"]);
+			if (instrumentObject["soundfontBank"] != undefined) this.soundfontBank = instrumentObject["soundfontBank"] | 0;
+			if (instrumentObject["soundfontProgram"] != undefined) this.soundfontProgram = instrumentObject["soundfontProgram"] | 0;
+			if (instrumentObject["soundfontIsDrum"] != undefined) this.soundfontIsDrum = Boolean(instrumentObject["soundfontIsDrum"]);
+		}
+		
 		if (instrumentObject["noteFilter"] != undefined) {
 			this.noteFilter.fromJsonObject(instrumentObject["noteFilter"]);
 		} else {
@@ -1784,12 +1839,13 @@ export class Channel {
 export class Song {
 	private static readonly _format: string = "BeepBox";
 	private static readonly _oldestVersion: number = 2;
-	private static readonly _latestVersion: number = 9;
+	private static readonly _latestVersion: number = 10;
 	
 	public scale: number;
 	public key: number;
 	public tempo: number;
 	public beatsPerBar: number;
+	public barBeats: number[] = [];
 	public barCount: number;
 	public patternsPerChannel: number;
 	public rhythm: number;
@@ -1831,6 +1887,16 @@ export class Song {
 	
 	public getChannelIsNoise(channelIndex: number): boolean {
 		return (channelIndex >= this.pitchChannelCount);
+	}
+	
+	public getBeatsPerBar(bar?: number): number {
+		if (bar !== undefined && this.barBeats != null && this.barBeats.length > 0) {
+			const b = Math.floor(bar);
+			if (b >= 0) {
+				return this.barBeats[b % this.barBeats.length];
+			}
+		}
+		return this.beatsPerBar;
 	}
 	
 	public initToDefault(andResetChannels: boolean = true): void {
@@ -1924,8 +1990,8 @@ export class Song {
 					buffer.push(base64IntToCharCode[point.type], base64IntToCharCode[point.freq], base64IntToCharCode[point.gain]);
 				}
 				
-				// The list of enabled effects is represented as a 12-bit bitfield using two six-bit characters.
-				buffer.push(SongTagCode.effects, base64IntToCharCode[instrument.effects >> 6], base64IntToCharCode[instrument.effects & 63]);
+				// The list of enabled effects is represented as an 18-bit bitfield using three six-bit characters.
+				buffer.push(SongTagCode.effects, base64IntToCharCode[(instrument.effects >> 12) & 63], base64IntToCharCode[(instrument.effects >> 6) & 63], base64IntToCharCode[instrument.effects & 63]);
 				if (effectsIncludeNoteFilter(instrument.effects)) {
 					buffer.push(base64IntToCharCode[instrument.noteFilter.controlPointCount]);
 					for (let j: number = 0; j < instrument.noteFilter.controlPointCount; j++) {
@@ -1965,6 +2031,15 @@ export class Song {
 				}
 				if (effectsIncludeReverb(instrument.effects)) {
 					buffer.push(base64IntToCharCode[instrument.reverb]);
+				}
+				if (effectsIncludePhaser(instrument.effects)) {
+					buffer.push(base64IntToCharCode[instrument.phaser ?? 5]);
+				}
+				if (effectsIncludeGain(instrument.effects)) {
+					buffer.push(base64IntToCharCode[instrument.gain ?? 5]);
+				}
+				if (effectsIncludeCompressor(instrument.effects)) {
+					buffer.push(base64IntToCharCode[instrument.compressor ?? 5]);
 				}
 				
 				if (instrument.type != InstrumentType.drumset) {
@@ -2032,6 +2107,14 @@ export class Song {
 						throw new Error("Not enough bits to represent sustain value and type in same base64 character.");
 					}
 					buffer.push(SongTagCode.stringSustain, base64IntToCharCode[instrument.stringSustain | (instrument.stringSustainType << 5)]);
+				} else if (instrument.type == InstrumentType.soundfont) {
+					buffer.push(SongTagCode.soundfont,
+						base64IntToCharCode[(instrument.soundfontBank >> 6) & 63],
+						base64IntToCharCode[instrument.soundfontBank & 63],
+						base64IntToCharCode[(instrument.soundfontProgram >> 6) & 63],
+						base64IntToCharCode[instrument.soundfontProgram & 63],
+						base64IntToCharCode[instrument.soundfontIsDrum ? 1 : 0]
+					);
 				} else {
 					throw new Error("Unknown instrument type.");
 				}
@@ -2219,6 +2302,14 @@ export class Song {
 			this.initToDefault(true);
 			return;
 		}
+		if (compressed.indexOf("%") != -1) {
+			try {
+				compressed = decodeURIComponent(compressed);
+			} catch (e) {
+				compressed = unescape(compressed);
+			}
+		}
+		compressed = compressed.replace(/\0/g, "0");
 		let charIndex: number = 0;
 		// skip whitespace.
 		while (compressed.charCodeAt(charIndex) <= CharCode.SPACE) charIndex++;
@@ -2239,6 +2330,7 @@ export class Song {
 		const beforeSeven: boolean = version < 7;
 		const beforeEight: boolean = version < 8;
 		const beforeNine:  boolean = version < 9;
+		const beforeTen:   boolean = version < 10;
 		this.initToDefault(beforeNine);
 		
 		if (beforeThree) {
@@ -2616,6 +2708,15 @@ export class Song {
 				instrument.stringSustain = clamp(0, Config.stringSustainRange, sustainValue & 0x1F);
 				instrument.stringSustainType = Config.enableAcousticSustain ? clamp(0, SustainType.length, sustainValue >> 5) : SustainType.bright;
 			} break;
+			case SongTagCode.soundfont: {
+				const instrument: Instrument = this.channels[instrumentChannelIterator].instruments[instrumentIndexIterator];
+				const bank: number = (base64CharCodeToInt[compressed.charCodeAt(charIndex++)] << 6) | base64CharCodeToInt[compressed.charCodeAt(charIndex++)];
+				const program: number = (base64CharCodeToInt[compressed.charCodeAt(charIndex++)] << 6) | base64CharCodeToInt[compressed.charCodeAt(charIndex++)];
+				const isDrum: boolean = base64CharCodeToInt[compressed.charCodeAt(charIndex++)] == 1;
+				instrument.soundfontBank = bank;
+				instrument.soundfontProgram = program;
+				instrument.soundfontIsDrum = isDrum;
+			} break;
 			case SongTagCode.fadeInOut: {
 				if (beforeNine) {
 					// this tag was used for a combination of transition and fade in/out.
@@ -2816,9 +2917,14 @@ export class Song {
 					const legacySettings: LegacySettings = legacySettingsCache![instrumentChannelIterator][instrumentIndexIterator];
 					instrument.convertLegacySettings(legacySettings);
 				} else {
-					// BeepBox currently uses two base64 characters at 6 bits each for a bitfield representing all the enabled effects.
-					if (EffectType.length > 12) throw new Error();
-					instrument.effects = (base64CharCodeToInt[compressed.charCodeAt(charIndex++)] << 6) | (base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
+					if (beforeTen) {
+						// Song versions 9 and earlier used 2 base64 characters for 12 bits of effects
+						instrument.effects = (base64CharCodeToInt[compressed.charCodeAt(charIndex++)] << 6) | (base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
+					} else {
+						// Song version 10 and later uses 3 base64 characters for 18 bits of effects
+						if (EffectType.length > 18) throw new Error("Too many effect types (" + EffectType.length + ") for 18-bit bitfield serialization");
+						instrument.effects = (base64CharCodeToInt[compressed.charCodeAt(charIndex++)] << 12) | (base64CharCodeToInt[compressed.charCodeAt(charIndex++)] << 6) | (base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
+					}
 					
 					if (effectsIncludeNoteFilter(instrument.effects)) {
 						const originalControlPointCount: number = base64CharCodeToInt[compressed.charCodeAt(charIndex++)];
@@ -2870,6 +2976,15 @@ export class Song {
 					}
 					if (effectsIncludeReverb(instrument.effects)) {
 						instrument.reverb = clamp(0, Config.reverbRange, base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
+					}
+					if (effectsIncludePhaser(instrument.effects)) {
+						instrument.phaser = clamp(0, 10, base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
+					}
+					if (effectsIncludeGain(instrument.effects)) {
+						instrument.gain = clamp(0, 10, base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
+					}
+					if (effectsIncludeCompressor(instrument.effects)) {
+						instrument.compressor = clamp(0, 10, base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
 					}
 				}
 				// Clamp the range.
@@ -3239,7 +3354,16 @@ export class Song {
 				} // while (true)
 			} break;
 			default: {
-				throw new Error("Unrecognized song tag code " + String.fromCharCode(command) + " at index " + (charIndex - 1));
+				const errorMsg = "Unrecognized song tag code '" + String.fromCharCode(command) + "' (code " + command + ") at index " + (charIndex - 1) + " (channel " + instrumentChannelIterator + ", instrument " + instrumentIndexIterator + ")";
+				console.error("[Song Data Corruption]", errorMsg, {
+					charIndex: charIndex - 1,
+					commandCode: command,
+					commandChar: String.fromCharCode(command),
+					channel: instrumentChannelIterator,
+					instrument: instrumentIndexIterator,
+					nearDataSnippet: compressed.substring(Math.max(0, charIndex - 25), Math.min(compressed.length, charIndex + 25))
+				});
+				throw new Error(errorMsg);
 			} break;
 		}
 	}
@@ -3291,6 +3415,7 @@ export class Song {
 			"introBars": this.loopStart,
 			"loopBars": this.loopLength,
 			"beatsPerBar": this.beatsPerBar,
+			"barBeats": this.barBeats,
 			"ticksPerBeat": Config.rhythms[this.rhythm].stepsPerBeat,
 			"beatsPerMinute": this.tempo,
 			//"patternCount": this.patternsPerChannel, // derive this from pattern arrays.
@@ -3352,6 +3477,9 @@ export class Song {
 		
 		if (jsonObject["beatsPerBar"] != undefined) {
 			this.beatsPerBar = Math.max(Config.beatsPerBarMin, Math.min(Config.beatsPerBarMax, jsonObject["beatsPerBar"] | 0));
+		}
+		if (jsonObject["barBeats"] != undefined && Array.isArray(jsonObject["barBeats"])) {
+			this.barBeats = jsonObject["barBeats"].map((x: any) => Math.max(Config.beatsPerBarMin, Math.min(Config.beatsPerBarMax, x | 0)));
 		}
 		
 		let importedPartsPerBeat: number = 4;
@@ -3991,6 +4119,13 @@ class Tone {
 	public supersawDelayIndex: number = -1;
 	public supersawPrevPhaseDelta: number | null = null;
 	public readonly pickedStrings: PickedString[] = [];
+	public soundfontSamplePos: number = 0.0;
+	public soundfontSampleDelta: number = 1.0;
+	public soundfontSampleDeltaScale: number = 1.0;
+	public soundfontSampleData: Float32Array | null = null;
+	public soundfontLoopStart: number = 0;
+	public soundfontLoopEnd: number = 0;
+	public soundfontLoopMode: number = 0;
 	
 	public readonly noteFilters: DynamicBiquadFilter[] = [];
 	public noteFilterCount: number = 0;
@@ -4031,6 +4166,13 @@ class Tone {
 		this.prevStringDecay = null;
 		this.supersawPrevPhaseDelta = null;
 		this.drumsetPitch = null;
+		this.soundfontSamplePos = 0.0;
+		this.soundfontSampleDelta = 1.0;
+		this.soundfontSampleDeltaScale = 1.0;
+		this.soundfontSampleData = null;
+		this.soundfontLoopStart = 0;
+		this.soundfontLoopEnd = 0;
+		this.soundfontLoopMode = 0;
 	}
 }
 
@@ -4053,6 +4195,9 @@ class InstrumentState {
 	public unison: Unison | null = null;
 	public chord: Chord | null = null;
 	public effects: number = 0;
+	public phaser: number = 5;
+	public gain: number = 5;
+	public compressor: number = 5;
 	
 	public eqFilterVolume: number = 1.0;
 	public eqFilterVolumeDelta: number = 0.0;
@@ -4276,6 +4421,9 @@ class InstrumentState {
 		if (instrument.echoSustain == 0)        effects &= ~(1 << EffectType.echo);
 		if (instrument.reverb      == 0)        effects &= ~(1 << EffectType.reverb);
 		this.effects = effects;
+		this.phaser = instrument.phaser ?? 5;
+		this.gain = instrument.gain ?? 5;
+		this.compressor = instrument.compressor ?? 5;
 		
 		this.allocateNecessaryBuffers(synth, instrument, samplesPerTick);
 		
@@ -4614,7 +4762,7 @@ export class Synth {
 				for (let i: number = 0; i < song.channels[j].instruments.length; i++) {
 					const instrument: Instrument = song.channels[j].instruments[i];
 					const instrumentState: InstrumentState = this.channels[j].instruments[i];
-					Synth.getInstrumentSynthFunction(instrument);
+					instrumentState.synthesizer = Synth.getInstrumentSynthFunction(instrument);
 					instrumentState.updateWaves(instrument, this.samplesPerSecond);
 					instrumentState.allocateNecessaryBuffers(this, instrument, samplesPerTick);
 				}
@@ -5614,9 +5762,22 @@ export class Synth {
 	
 	private playTone(channelIndex: number, bufferIndex: number, runLength: number, tone: Tone): void {
 		const channelState: ChannelState = this.channels[channelIndex];
-		const instrumentState: InstrumentState = channelState.instruments[tone.instrumentIndex];
-		
-		instrumentState.synthesizer!(this, bufferIndex, runLength, tone, instrumentState);
+		if (channelState == null) return;
+		let instrumentIndex: number = tone.instrumentIndex;
+		if (instrumentIndex < 0 || instrumentIndex >= channelState.instruments.length) {
+			instrumentIndex = 0;
+			tone.instrumentIndex = 0;
+		}
+		const instrumentState: InstrumentState = channelState.instruments[instrumentIndex];
+		if (instrumentState != null) {
+			if (typeof instrumentState.synthesizer === "function") {
+				instrumentState.synthesizer(this, bufferIndex, runLength, tone, instrumentState);
+			} else if (this.song != null && this.song.channels[channelIndex] != null && this.song.channels[channelIndex].instruments[instrumentIndex] != null) {
+				const synthFunc = Synth.getInstrumentSynthFunction(this.song.channels[channelIndex].instruments[instrumentIndex]);
+				instrumentState.synthesizer = synthFunc;
+				synthFunc(this, bufferIndex, runLength, tone, instrumentState);
+			}
+		}
 		tone.envelopeComputer.clearEnvelopes();
 	}
 	
@@ -5628,8 +5789,15 @@ export class Synth {
 		const roundedSamplesPerTick: number = Math.ceil(samplesPerTick);
 		const channel: Channel = song.channels[channelIndex];
 		const channelState: ChannelState = this.channels[channelIndex];
-		const instrument: Instrument = channel.instruments[tone.instrumentIndex];
-		const instrumentState: InstrumentState = channelState.instruments[tone.instrumentIndex];
+		if (channel == null || channelState == null) return;
+		let instrumentIndex: number = tone.instrumentIndex;
+		if (instrumentIndex < 0 || instrumentIndex >= channel.instruments.length) {
+			instrumentIndex = 0;
+			tone.instrumentIndex = 0;
+		}
+		const instrument: Instrument = channel.instruments[instrumentIndex];
+		const instrumentState: InstrumentState = channelState.instruments[instrumentIndex];
+		if (instrument == null || instrumentState == null) return;
 		instrumentState.awake = true;
 		instrumentState.tonesAddedInThisTick = true;
 		if (!instrumentState.computed) {
@@ -5692,6 +5860,14 @@ export class Synth {
 			baseExpression = Config.supersawBaseExpression;
 		} else if (instrument.type == InstrumentType.pickedString) {
 			baseExpression = Config.pickedStringBaseExpression;
+		} else if (instrument.type == InstrumentType.soundfont) {
+			baseExpression = Config.soundfontBaseExpression;
+			if (isNoiseChannel || instrument.soundfontIsDrum) {
+				basePitch = Config.spectrumBasePitch;
+				baseExpression *= 1.8;
+			}
+			expressionReferencePitch = 60;
+			pitchDamping = 60;
 		} else {
 			throw new Error("Unknown instrument type in computeTone.");
 		}
@@ -5818,8 +5994,8 @@ export class Synth {
 		}
 		
 		if (effectsIncludeVibrato(instrument.effects)) {
-			const delayTicks: number = Config.vibratos[instrument.vibrato].delayTicks;
-			const vibratoAmplitude: number = Config.vibratos[instrument.vibrato].amplitude;
+			const delayTicks: number = (instrument.vibratoDelay > 0) ? instrument.vibratoDelay : Config.vibratos[instrument.vibrato].delayTicks;
+			const vibratoAmplitude: number = (instrument.vibratoDepth !== undefined) ? (Config.vibratos[instrument.vibrato].amplitude * (instrument.vibratoDepth / 100.0)) : Config.vibratos[instrument.vibrato].amplitude;
 			
 			// To maintain pitch continuity, (mostly for picked string which retriggers impulse
 			// otherwise) remember the vibrato at the end of this run and reuse it at the start
@@ -6088,6 +6264,33 @@ export class Synth {
 				tone.phaseDeltaScales[0] = basePhaseDeltaScale;
 			}
 			
+			if (instrument.type == InstrumentType.soundfont) {
+				const isDrum: boolean = isNoiseChannel || instrument.soundfontIsDrum;
+				const midiPitch: number = isDrum ? Math.max(0, Math.min(127, (tone.pitches[0] + 36))) : Math.max(0, Math.min(127, Math.round(startPitch)));
+				
+				let sfPreset: SoundFontPreset | null = SoundFontRegistry.getPreset(instrument.soundfontBank, instrument.soundfontProgram, isDrum);
+				if (sfPreset == null && instrument.soundfontName) {
+					sfPreset = SoundFontRegistry.getPresetByName(instrument.soundfontName);
+				}
+				
+				if (sfPreset != null) {
+					const resolved = sfPreset.findSampleZone(midiPitch, 100);
+					if (resolved != null && resolved.sample && resolved.sample.data) {
+						tone.soundfontSampleData = resolved.sample.data;
+						tone.soundfontLoopStart = resolved.startLoop;
+						tone.soundfontLoopEnd = resolved.endLoop;
+						tone.soundfontLoopMode = resolved.sampleModes;
+						
+						const sampleRate = resolved.sample.sampleRate || 44100;
+						const rootKey = isDrum ? (resolved.sample.originalPitch ?? midiPitch) : resolved.rootKey;
+						const pitchOffsetCents = isDrum ? 0 : (startPitch - rootKey) * 100 + resolved.fineTune;
+						const pitchRatio = Math.pow(2.0, pitchOffsetCents / 1200.0);
+						tone.soundfontSampleDelta = (sampleRate / this.samplesPerSecond) * pitchRatio;
+						tone.soundfontSampleDeltaScale = basePhaseDeltaScale;
+					}
+				}
+			}
+			
 			// TODO: make expressionStart and expressionEnd variables earlier and modify those
 			// instead of these supersawExpression variables.
 			let supersawExpressionStart: number = 1.0;
@@ -6278,14 +6481,19 @@ export class Synth {
 	
 	public static getInstrumentSynthFunction(instrument: Instrument): Function {
 		if (instrument.type == InstrumentType.fm) {
-			const fingerprint: string = instrument.algorithm + "_" + instrument.feedbackType;
+			const algoIndex = Math.max(0, Math.min(Config.algorithms.length - 1, instrument.algorithm || 0));
+			const feedbackIndex = Math.max(0, Math.min(Config.feedbacks.length - 1, instrument.feedbackType || 0));
+			const fingerprint: string = algoIndex + "_" + feedbackIndex;
 			if (Synth.fmSynthFunctionCache[fingerprint] == undefined) {
 				const synthSource: string[] = [];
+				const algo = Config.algorithms[algoIndex] ?? Config.algorithms[0];
+				const feedback = Config.feedbacks[feedbackIndex] ?? Config.feedbacks[0];
 				
 				for (const line of Synth.fmSourceTemplate) {
 					if (line.indexOf("// CARRIER OUTPUTS") != -1) {
 						const outputs: string[] = [];
-						for (let j: number = 0; j < Config.algorithms[instrument.algorithm].carrierCount; j++) {
+						const carrierCount = algo ? algo.carrierCount : 1;
+						for (let j: number = 0; j < carrierCount; j++) {
 							outputs.push("operator" + j + "Scaled");
 						}
 						synthSource.push(line.replace("/*operator#Scaled*/", outputs.join(" + ")));
@@ -6294,12 +6502,14 @@ export class Synth {
 							for (const operatorLine of Synth.operatorSourceTemplate) {
 								if (operatorLine.indexOf("/* + operator@Scaled*/") != -1) {
 									let modulators = "";
-									for (const modulatorNumber of Config.algorithms[instrument.algorithm].modulatedBy[j]) {
-										modulators += " + operator" + (modulatorNumber - 1) + "Scaled";
+									if (algo && algo.modulatedBy && algo.modulatedBy[j]) {
+										for (const modulatorNumber of algo.modulatedBy[j]) {
+											modulators += " + operator" + (modulatorNumber - 1) + "Scaled";
+										}
 									}
 								
-									const feedbackIndices: ReadonlyArray<number> = Config.feedbacks[instrument.feedbackType].indices[j];
-									if (feedbackIndices.length > 0) {
+									const feedbackIndices: ReadonlyArray<number> = (feedback && feedback.indices && feedback.indices[j]) ? feedback.indices[j] : [];
+									if (feedbackIndices && feedbackIndices.length > 0) {
 										modulators += " + feedbackMult * (";
 										const feedbacks: string[] = [];
 										for (const modulatorNumber of feedbackIndices) {
@@ -6322,8 +6532,6 @@ export class Synth {
 					}
 				}
 				
-				//console.log(synthSource.join("\n"));
-				
 				const wrappedFmSynth: string = "return (synth, bufferIndex, runLength, tone, instrument) => {" + synthSource.join("\n") + "}";
 				
 				Synth.fmSynthFunctionCache[fingerprint] = new Function("Config", "Synth", wrappedFmSynth)(Config, Synth);
@@ -6345,9 +6553,76 @@ export class Synth {
 			return Synth.spectrumSynth;
 		} else if (instrument.type == InstrumentType.drumset) {
 			return Synth.drumsetSynth;
+		} else if (instrument.type == InstrumentType.soundfont) {
+			return Synth.soundfontSynth;
 		} else {
 			throw new Error("Unrecognized instrument type: " + instrument.type);
 		}
+	}
+	
+	private static soundfontSynth(synth: Synth, bufferIndex: number, runLength: number, tone: Tone, instrumentState: InstrumentState): void {
+		const data: Float32Array = synth.tempMonoInstrumentSampleBuffer!;
+		const sampleData: Float32Array | null = tone.soundfontSampleData;
+		if (sampleData == null || sampleData.length === 0) return;
+		
+		const sampleLen: number = sampleData.length;
+		let pos: number = tone.soundfontSamplePos;
+		let delta: number = tone.soundfontSampleDelta;
+		const deltaScale: number = +tone.soundfontSampleDeltaScale;
+		let expression: number = +tone.expression;
+		const expressionDelta: number = +tone.expressionDelta;
+		const loopStart: number = tone.soundfontLoopStart;
+		const loopEnd: number = tone.soundfontLoopEnd;
+		const isLooping: boolean = (tone.soundfontLoopMode === 1 || tone.soundfontLoopMode === 3) && loopEnd > loopStart + 16 && loopEnd <= sampleLen;
+		
+		const filters: DynamicBiquadFilter[] = tone.noteFilters;
+		const filterCount: number = tone.noteFilterCount|0;
+		let initialFilterInput1: number = +tone.initialNoteFilterInput1;
+		let initialFilterInput2: number = +tone.initialNoteFilterInput2;
+		const applyFilters: Function = Synth.applyFilters;
+		
+		const stopIndex: number = bufferIndex + runLength;
+		for (let sampleIndex: number = bufferIndex; sampleIndex < stopIndex; sampleIndex++) {
+			let sampleVal: number = 0.0;
+			if (pos >= 0 && pos < sampleLen) {
+				const idx: number = pos | 0;
+				const frac: number = pos - idx;
+				const s0: number = sampleData[idx];
+				const s1: number = (idx + 1 < sampleLen) ? sampleData[idx + 1] : (isLooping ? sampleData[loopStart] : s0);
+				sampleVal = s0 + (s1 - s0) * frac;
+			}
+			
+			pos += delta;
+			if (isLooping) {
+				if (pos >= loopEnd) {
+					const loopLen: number = loopEnd - loopStart;
+					pos = loopStart + ((pos - loopStart) % loopLen);
+				}
+			} else {
+				if (pos >= sampleLen) {
+					pos = sampleLen;
+				}
+			}
+			
+			const inputSample: number = sampleVal;
+			const sample: number = applyFilters(inputSample, initialFilterInput1, initialFilterInput2, filterCount, filters);
+			initialFilterInput2 = initialFilterInput1;
+			initialFilterInput1 = inputSample;
+			
+			delta *= deltaScale;
+			const output: number = sample * expression;
+			expression += expressionDelta;
+			
+			data[sampleIndex] += output;
+		}
+		
+		tone.soundfontSamplePos = pos;
+		tone.soundfontSampleDelta = delta;
+		tone.expression = expression;
+		
+		synth.sanitizeFilters(filters);
+		tone.initialNoteFilterInput1 = initialFilterInput1;
+		tone.initialNoteFilterInput2 = initialFilterInput2;
 	}
 	
 	private static chipSynth(synth: Synth, bufferIndex: number, runLength: number, tone: Tone, instrumentState: InstrumentState): void {
@@ -6672,6 +6947,9 @@ export class Synth {
 		const usesChorus: boolean = effectsIncludeChorus(instrumentState.effects);
 		const usesEcho: boolean = effectsIncludeEcho(instrumentState.effects);
 		const usesReverb: boolean = effectsIncludeReverb(instrumentState.effects);
+		const usesPhaser: boolean = effectsIncludePhaser(instrumentState.effects);
+		const usesGain: boolean = effectsIncludeGain(instrumentState.effects);
+		const usesCompressor: boolean = effectsIncludeCompressor(instrumentState.effects);
 		let signature: number = 0;  if (usesDistortion) signature = signature | 1;
 		signature = signature << 1; if (usesBitcrusher) signature = signature | 1;
 		signature = signature << 1; if (usesEqFilter) signature = signature | 1;
@@ -6679,6 +6957,9 @@ export class Synth {
 		signature = signature << 1; if (usesChorus) signature = signature | 1;
 		signature = signature << 1; if (usesEcho) signature = signature | 1;
 		signature = signature << 1; if (usesReverb) signature = signature | 1;
+		signature = signature << 1; if (usesPhaser) signature = signature | 1;
+		signature = signature << 1; if (usesGain) signature = signature | 1;
+		signature = signature << 1; if (usesCompressor) signature = signature | 1;
 		
 		let effectsFunction: Function = Synth.effectsFunctionCache[signature];
 		if (effectsFunction == undefined) {
@@ -7086,6 +7367,37 @@ export class Synth {
 					sampleL += reverbSample1 + reverbSample2 + reverbSample3;
 					sampleR += reverbSample0 + reverbSample2 - reverbSample3;
 					reverb += reverbDelta;`
+			}
+			
+			if (usesPhaser) {
+				effectsSource += `
+					let phaserSetting = (instrumentState.phaser !== undefined ? instrumentState.phaser : 5);
+					let phaserDepth = phaserSetting / 5.0;
+					let phaserLFO = Math.sin(sampleIndex * 0.0004);
+					let phaserLFOR = Math.cos(sampleIndex * 0.0004);
+					sampleL += Math.sin(sampleL * 2.0 + phaserLFO * 3.14159) * 0.5 * phaserDepth;
+					sampleR += Math.sin(sampleR * 2.0 + phaserLFOR * 3.14159) * 0.5 * phaserDepth;`
+			}
+			if (usesGain) {
+				effectsSource += `
+					let gainSetting = (instrumentState.gain !== undefined ? instrumentState.gain : 5);
+					let gainMult = gainSetting <= 5 ? (gainSetting / 5.0) : (1.0 + (gainSetting - 5.0) * 0.6);
+					sampleL *= gainMult;
+					sampleR *= gainMult;`
+			}
+			if (usesCompressor) {
+				effectsSource += `
+					let compSetting = (instrumentState.compressor !== undefined ? instrumentState.compressor : 5);
+					if (compSetting > 0) {
+						let threshold = 0.8 - compSetting * 0.06;
+						let absL = Math.abs(sampleL);
+						let absR = Math.abs(sampleR);
+						if (absL > threshold) sampleL = (sampleL > 0 ? 1 : -1) * (threshold + (absL - threshold) * 0.3);
+						if (absR > threshold) sampleR = (sampleR > 0 ? 1 : -1) * (threshold + (absR - threshold) * 0.3);
+						let makeup = 1.0 + compSetting * 0.12;
+						sampleL *= makeup;
+						sampleR *= makeup;
+					}`
 			}
 			
 			effectsSource += `
