@@ -34,12 +34,14 @@ export const enum MidiEventType {
 
 export const enum MidiControlEventMessage {
 	
+	modulationWheel = 0x01,
 	setParameterMSB = 0x06,
 	volumeMSB = 0x07,
 	panMSB = 0x0A,
 	expressionMSB = 0x0B,
 	
 	setParameterLSB = 0x26,
+	sustainPedal = 0x40,
 	//volumeLSB = 0x27,
 	//expressionLSB = 0x2B,
 	

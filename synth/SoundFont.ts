@@ -276,12 +276,38 @@ export class SoundFontRegistry {
 			SoundFontRegistry._soundFonts.push(sf);
 		}
 
-		for (const preset of sf.presets) {
-			const key = `${preset.bank}_${preset.preset}_${preset.isDrum ? "drum" : "pitch"}`;
-			SoundFontRegistry._presetsByBankProg.set(key, preset);
-			SoundFontRegistry._presetsByName.set(preset.name.toLowerCase(), preset);
-			if (preset.soundFont && preset.soundFont.name) {
-				SoundFontRegistry._presetsByName.set(`${preset.soundFont.name.toLowerCase()}:${preset.name.toLowerCase()}`, preset);
+		SoundFontRegistry._rebuildMaps();
+	}
+
+	public static remove(sfNameOrSf: SoundFont | string): void {
+		const name = (typeof sfNameOrSf === "string" ? sfNameOrSf : sfNameOrSf.name).toLowerCase().trim();
+		SoundFontRegistry._soundFonts = SoundFontRegistry._soundFonts.filter(s => (s.name || "").toLowerCase().trim() !== name);
+		SoundFontRegistry._rebuildMaps();
+	}
+
+	private static _rebuildMaps(): void {
+		SoundFontRegistry._presetsByBankProg.clear();
+		SoundFontRegistry._presetsByName.clear();
+
+		for (const sf of SoundFontRegistry._soundFonts) {
+			const sfNameLower = (sf.name || "").toLowerCase().trim();
+			for (const preset of sf.presets) {
+				const defaultKey = `${preset.bank}_${preset.preset}_${preset.isDrum ? "drum" : "pitch"}`;
+				if (!SoundFontRegistry._presetsByBankProg.has(defaultKey)) {
+					SoundFontRegistry._presetsByBankProg.set(defaultKey, preset);
+				}
+				if (sfNameLower) {
+					const sfKey = `${sfNameLower}_${preset.bank}_${preset.preset}_${preset.isDrum ? "drum" : "pitch"}`;
+					SoundFontRegistry._presetsByBankProg.set(sfKey, preset);
+				}
+
+				const pNameLower = preset.name.toLowerCase().trim();
+				if (!SoundFontRegistry._presetsByName.has(pNameLower)) {
+					SoundFontRegistry._presetsByName.set(pNameLower, preset);
+				}
+				if (sfNameLower) {
+					SoundFontRegistry._presetsByName.set(`${sfNameLower}:${pNameLower}`, preset);
+				}
 			}
 		}
 	}
@@ -290,19 +316,25 @@ export class SoundFontRegistry {
 		return SoundFontRegistry._soundFonts;
 	}
 
-	public static getPreset(bank: number, program: number, isDrum: boolean = false): SoundFontPreset | null {
+	public static getPreset(bank: number, program: number, isDrum: boolean = false, sfName?: string): SoundFontPreset | null {
+		if (sfName) {
+			const sfKey = `${sfName.toLowerCase().trim()}_${bank}_${program}_${isDrum ? "drum" : "pitch"}`;
+			const direct = SoundFontRegistry._presetsByBankProg.get(sfKey);
+			if (direct) return direct;
+		}
+
 		const key = `${bank}_${program}_${isDrum ? "drum" : "pitch"}`;
 		const direct = SoundFontRegistry._presetsByBankProg.get(key);
 		if (direct) return direct;
 
 		// Fallback without drum tag
 		for (const p of SoundFontRegistry._presetsByBankProg.values()) {
-			if (p.bank === bank && p.preset === program) return p;
+			if ((!sfName || p.soundFont.name.toLowerCase().trim() === sfName.toLowerCase().trim()) && p.bank === bank && p.preset === program) return p;
 		}
 
 		// Fallback by program only if bank 0
 		for (const p of SoundFontRegistry._presetsByBankProg.values()) {
-			if (p.preset === program && p.isDrum === isDrum) return p;
+			if ((!sfName || p.soundFont.name.toLowerCase().trim() === sfName.toLowerCase().trim()) && p.preset === program && p.isDrum === isDrum) return p;
 		}
 
 		// Fallback to first available preset
@@ -310,14 +342,27 @@ export class SoundFontRegistry {
 		return all.length > 0 ? all[0] : null;
 	}
 
-	public static getPresetByName(name: string): SoundFontPreset | null {
+	public static getPresetByName(name: string, sfName?: string): SoundFontPreset | null {
 		if (!name) return null;
 		const lower = name.toLowerCase().trim();
+
+		if (sfName) {
+			const sfKey = `${sfName.toLowerCase().trim()}:${lower}`;
+			if (SoundFontRegistry._presetsByName.has(sfKey)) {
+				return SoundFontRegistry._presetsByName.get(sfKey)!;
+			}
+		}
+
 		if (SoundFontRegistry._presetsByName.has(lower)) {
 			return SoundFontRegistry._presetsByName.get(lower)!;
 		}
+
 		for (const [k, v] of SoundFontRegistry._presetsByName.entries()) {
-			if (k.includes(lower) || lower.includes(k)) return v;
+			if (k.includes(lower) || lower.includes(k)) {
+				if (!sfName || v.soundFont.name.toLowerCase().trim() === sfName.toLowerCase().trim()) {
+					return v;
+				}
+			}
 		}
 		return null;
 	}

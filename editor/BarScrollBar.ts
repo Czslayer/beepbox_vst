@@ -4,6 +4,7 @@ import {SongDocument} from "./SongDocument.js";
 import {ColorConfig} from "./ColorConfig.js";
 import {HTML, SVG} from "imperative-html/dist/esm/elements-strict.js";
 import {EasyPointers} from "./EasyPointers.js";
+import {SectionManager} from "./SectionManager.js";
 
 export class BarScrollBar {
 	private readonly _editorWidth: number = 512;
@@ -32,6 +33,7 @@ export class BarScrollBar {
 	private _dragStart: number;
 	private _notchSpace: number;
 	private _renderedNotchCount: number = -1;
+	private _renderedSectionCount: number = -1;
 	private _renderedScrollBarPos: number = -1;
 	
 	constructor(private _doc: SongDocument, private _trackAndMuteContainer: HTMLDivElement) {
@@ -144,15 +146,33 @@ export class BarScrollBar {
 	public render(): void {
 		this._notchSpace = (this._editorWidth-1) / Math.max(this._doc.trackVisibleBars, this._doc.song.barCount);
 		
-		const resized: boolean = this._renderedNotchCount != this._doc.song.barCount;
+		const sections = SectionManager.getSections();
+		const resized: boolean = this._renderedNotchCount != this._doc.song.barCount || this._renderedSectionCount != sections.length;
 		if (resized) {
 			this._renderedNotchCount = this._doc.song.barCount;
+			this._renderedSectionCount = sections.length;
 			
 			while (this._notches.firstChild) this._notches.removeChild(this._notches.firstChild);
 			
 			for (let i: number = 0; i <= this._doc.song.barCount; i++) {
 				const lineHeight: number = (i % 16 == 0) ? 0 : ((i % 4 == 0) ? this._editorHeight / 8 : this._editorHeight / 3);
 				this._notches.appendChild(SVG.rect({fill: ColorConfig.uiWidgetBackground, x: i * this._notchSpace - 1, y: lineHeight, width: 2, height: this._editorHeight - lineHeight * 2}));
+			}
+
+			for (const section of sections) {
+				const startX = section.startBar * this._notchSpace;
+				const endX = (section.endBar + 1) * this._notchSpace;
+				const rect = SVG.rect({
+					fill: section.color,
+					"fill-opacity": "0.35",
+					stroke: section.color,
+					"stroke-width": "1",
+					x: startX,
+					y: 0,
+					width: Math.max(2, endX - startX),
+					height: this._editorHeight
+				});
+				this._notches.appendChild(rect);
 			}
 		}
 		

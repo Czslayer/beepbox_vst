@@ -5,6 +5,7 @@ import {SongDocument} from "./SongDocument.js";
 import {Prompt} from "./Prompt.js";
 import {CustomPresetManager, CustomPreset} from "./CustomPresetManager.js";
 import {ColorConfig} from "./ColorConfig.js";
+import {ChangeLoadChannelPreset} from "./changes.js";
 
 const {button, div, span, h2, p} = HTML;
 
@@ -67,8 +68,15 @@ export class ManageCustomPresetsPrompt implements Prompt {
 				preset.name
 			);
 
+			const loadBtn = button({type: "button", style: "font-size: 10px; padding: 2px 6px; margin-left: 4px; color: #88ff88; cursor: pointer;", title: "Load preset into current channel"}, "Load");
 			const renameBtn = button({type: "button", style: "font-size: 10px; padding: 2px 5px; margin-left: 4px; cursor: pointer;"}, "Rename");
 			const deleteBtn = button({type: "button", style: "font-size: 10px; padding: 2px 5px; margin-left: 4px; color: #ff8888; cursor: pointer;"}, "Delete");
+
+			loadBtn.addEventListener("click", () => {
+				this._doc.record(new ChangeLoadChannelPreset(this._doc, preset));
+				this._doc.prompt = null;
+				this._doc.notifier.changed();
+			});
 
 			renameBtn.addEventListener("click", () => {
 				const newName = window.prompt("Rename preset:", preset.name);
@@ -93,7 +101,7 @@ export class ManageCustomPresetsPrompt implements Prompt {
 				div({style: "display: flex; align-items: center; overflow: hidden; max-width: 220px;"},
 					typeBadge, nameSpan, instCountText
 				),
-				div({style: "display: flex; align-items: center;"}, renameBtn, deleteBtn)
+				div({style: "display: flex; align-items: center;"}, loadBtn, renameBtn, deleteBtn)
 			);
 
 			this._presetListContainer.appendChild(row);

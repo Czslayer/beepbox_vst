@@ -375,12 +375,13 @@ export class ExportPrompt implements Prompt {
 		let midiChannelCounter: number = 0;
 		let foundADrumset: boolean = false;
 		for (let channel: number = 0; channel < this._doc.song.getChannelCount(); channel++) {
-			if (!foundADrumset && this._doc.song.channels[channel].instruments[0].type == InstrumentType.drumset) {
+			const isNoise: boolean = this._doc.song.getChannelIsNoise(channel);
+			if (!foundADrumset && isNoise) {
 				tracks.push({isMeta: false, channel: channel, midiChannel: 9, isNoise: true, isDrumset: true});
-				foundADrumset = true; // There can only be one drumset channel, and it's always channel 9 (seen as 10 in most UIs). :/
+				foundADrumset = true; // First drum/noise channel is always assigned to MIDI channel 9 (channel 10 in 1-based MIDI).
 			} else {
 				if (midiChannelCounter >= 16) continue; // The MIDI standard only supports 16 channels.
-				tracks.push({isMeta: false, channel: channel, midiChannel: midiChannelCounter++, isNoise: this._doc.song.getChannelIsNoise(channel), isDrumset: false});
+				tracks.push({isMeta: false, channel: channel, midiChannel: midiChannelCounter++, isNoise: isNoise, isDrumset: isNoise});
 				if (midiChannelCounter == 9) midiChannelCounter++; // skip midi drum channel.
 			}
 		}
@@ -674,8 +675,8 @@ export class ExportPrompt implements Prompt {
 												69, // Cabasa
 												54, // Tambourine
 											];
-											if (nextPitch < 0 || nextPitch >= drumsetMap.length) throw new Error("Could not find corresponding drumset pitch. " + nextPitch);
-											nextPitch = drumsetMap[nextPitch];
+											const safePitchIndex = Math.max(0, Math.min(drumsetMap.length - 1, nextPitch));
+											nextPitch = drumsetMap[safePitchIndex];
 										} else {
 											if (usesArpeggio && note.pitches.length > toneIndex + 1 && toneIndex == toneCount - 1) {
 												const midiTicksSinceBeat = (midiTickTime - barStartTime) % midiTicksPerBeat;

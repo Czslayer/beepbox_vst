@@ -73,7 +73,7 @@ export class ImportPrompt implements Prompt {
 			const reader: FileReader = new FileReader();
 			reader.addEventListener("load", (event: Event): void => {
 				try {
-					const soundFont = SoundFont.parse(<ArrayBuffer>reader.result);
+					const soundFont = SoundFont.parse(<ArrayBuffer>reader.result, file.name.replace(/\.sf2$/i, ""));
 					if (soundFont.presets.length == 0) {
 						alert("No presets found in this SoundFont (.sf2) file.");
 						this._close();

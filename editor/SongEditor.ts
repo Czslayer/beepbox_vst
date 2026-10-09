@@ -26,6 +26,8 @@ import {BarScrollBar} from "./BarScrollBar.js";
 import {OctaveScrollBar} from "./OctaveScrollBar.js";
 import {KeyboardLayout} from "./KeyboardLayout.js";
 import {Piano} from "./Piano.js";
+import {ChordDetector} from "./ChordDetector.js";
+import {GroupSectionBar} from "./GroupSectionBar.js";
 import {BeatsPerBarPrompt} from "./BeatsPerBarPrompt.js";
 import {MoveNotesSidewaysPrompt} from "./MoveNotesSidewaysPrompt.js";
 import {SongDurationPrompt} from "./SongDurationPrompt.js";
@@ -36,11 +38,16 @@ import {ImportPrompt} from "./ImportPrompt.js";
 import {SoundFontPrompt} from "./SoundFontPrompt.js";
 import {SongRecoveryPrompt} from "./SongRecoveryPrompt.js";
 import {RecordingSetupPrompt} from "./RecordingSetupPrompt.js";
+import {TempoPrompt} from "./TempoPrompt.js";
+import {AIGenerateSectionPrompt} from "./AIGenerateSectionPrompt.js";
+import {AIAutoSectionPrompt} from "./AIAutoSectionPrompt.js";
+import {MovementPrompt} from "./MovementPrompt.js";
 import {CustomPresetManager, CustomPreset} from "./CustomPresetManager.js";
 import {SaveCustomPresetPrompt} from "./SaveCustomPresetPrompt.js";
 import {ManageCustomPresetsPrompt} from "./ManageCustomPresetsPrompt.js";
+import {SectionManager} from "./SectionManager.js";
 import {Change} from "./Change.js";
-import {ChangeTempo, ChangeChorus, ChangeEchoDelay, ChangeEchoSustain, ChangeReverb, ChangeVolume, ChangePan, ChangePatternSelection, ChangeSupersawDynamism, ChangeSupersawSpread, ChangeSupersawShape, ChangePulseWidth, ChangeFeedbackAmplitude, ChangeOperatorAmplitude, ChangeOperatorFrequency, ChangeDrumsetEnvelope, ChangePasteInstrument, ChangePreset, pickRandomPresetValue, ChangeRandomGeneratedInstrument, ChangeScale, ChangeDetectKey, ChangeKey, ChangeRhythm, ChangeFeedbackType, ChangeAlgorithm, ChangeCustomizeInstrument, ChangeChipWave, ChangeNoiseWave, ChangeTransition, ChangeToggleEffects, ChangeVibrato, ChangeUnison, ChangeChord, ChangeSong, ChangePitchShift, ChangeDetune, ChangeDistortion, ChangeStringSustain, ChangeBitcrusherFreq, ChangeBitcrusherQuantization, ChangeAddEnvelope, ChangeAddChannelInstrument, ChangeRemoveChannelInstrument, ChangeVibratoDelay, ChangeVibratoDepth, ChangePhaser, ChangeGain, ChangeCompressor, ChangeLoadChannelPreset} from "./changes.js";
+import {ChangeTempo, ChangeChorus, ChangeEchoDelay, ChangeEchoSustain, ChangeReverb, ChangeVolume, ChangePan, ChangePatternSelection, ChangeSupersawDynamism, ChangeSupersawSpread, ChangeSupersawShape, ChangePulseWidth, ChangeFeedbackAmplitude, ChangeOperatorAmplitude, ChangeOperatorFrequency, ChangeOperatorWave, ChangeDrumsetEnvelope, ChangePasteInstrument, ChangePreset, pickRandomPresetValue, ChangeRandomGeneratedInstrument, ChangeScale, ChangeDetectKey, ChangeKey, ChangeRhythm, ChangeFeedbackType, ChangeAlgorithm, ChangeCustomizeInstrument, ChangeChipWave, ChangeNoiseWave, ChangeTransition, ChangeToggleEffects, ChangeVibrato, ChangeUnison, ChangeChord, ChangeSong, ChangePitchShift, ChangeDetune, ChangeDistortion, ChangeStringSustain, ChangeBitcrusherFreq, ChangeBitcrusherQuantization, ChangeAddEnvelope, ChangeAddChannelInstrument, ChangeRemoveChannelInstrument, ChangeVibratoDelay, ChangeVibratoDepth, ChangePhaser, ChangeGain, ChangeCompressor, ChangeLoadChannelPreset, ChangeChannelName} from "./changes.js";
 
 const {a, button, div, input, select, span, optgroup, option} = HTML;
 
@@ -211,12 +218,14 @@ export class SongEditor {
 	private readonly _loopEditor: LoopEditor = new LoopEditor(this.doc);
 	private readonly _octaveScrollBar: OctaveScrollBar = new OctaveScrollBar(this.doc);
 	private readonly _piano: Piano = new Piano(this.doc);
+	private readonly _chordDetector: ChordDetector = new ChordDetector(this.doc);
 	private readonly _playButton: HTMLButtonElement = button({class: "playButton", type: "button", title: "Play (Space)"}, span("Play"));
 	private readonly _pauseButton: HTMLButtonElement = button({class: "pauseButton", style: "display: none;", type: "button", title: "Pause (Space)"}, "Pause");
 	private readonly _recordButton: HTMLButtonElement = button({class: "recordButton", style: "display: none;", type: "button", title: "Record (Ctrl+Space)"}, span("Record"));
 	private readonly _stopButton: HTMLButtonElement = button({class: "stopButton", style: "display: none;", type: "button", title: "Stop Recording (Space)"}, "Stop Recording");
 	private readonly _prevBarButton: HTMLButtonElement = button({class: "prevBarButton", type: "button", title: "Previous Bar (left bracket)"});
 	private readonly _nextBarButton: HTMLButtonElement = button({class: "nextBarButton", type: "button", title: "Next Bar (right bracket)"});
+	private readonly _channelNameInput: HTMLInputElement = input({type: "text", style: "width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 3px; padding: 2px 5px; font-size: 11px;", placeholder: "e.g. Lead / Pad"});
 	private readonly _volumeSlider: Slider = new Slider(input({title: "main volume", style: "flex-grow: 1; margin: 0;", type: "range", min: "0", max: "75", value: "50", step: "1"}), this.doc, (oldValue: number, newValue: number) => { this._setVolumeSlider(); return null; });
 	private readonly _fileMenu: HTMLSelectElement = select({style: "width: 100%;"},
 		option({selected: true, disabled: true, hidden: hideSelectMenuTitlesInOptions}, "File"),
@@ -251,6 +260,12 @@ export class SongEditor {
 		option({value: "moveNotesSideways"}, "Move All Notes Sideways..."),
 		option({value: "beatsPerBar"}, "Change Beats Per Bar..."),
 		option({value: "barCount"}, "Change Song Length..."),
+		option({value: "tempo"}, "⏱️ Tempo & Bar Tempo Settings..."),
+		option({value: "groupSection"}, "📁 Group Highlighted Bars into Section (G)"),
+		option({value: "markMovement"}, "🎭 Mark Song Part / Movement..."),
+		option({value: "aiGenerateSection"}, "✨ AI Generate Next Section (+8 Bars)..."),
+		option({value: "aiAutoSection"}, "🔍 AI Auto-Section Full Song..."),
+		option({value: "clearSections"}, "❌ Clear All Bar Sections"),
 		option({value: "channelSettings"}, "Channel Settings... (Q)"),
 	);
 	private readonly _optionsMenu: HTMLSelectElement = select({style: "width: 100%;"},
@@ -286,6 +301,7 @@ export class SongEditor {
 	private readonly _echoDelayRow: HTMLDivElement = div({class: "selectRow"}, span({class: "tip", onclick: ()=>this._openPrompt("echoDelay")}, "Echo Delay:"), this._echoDelaySlider.container);
 	private readonly _rhythmSelect: HTMLSelectElement = buildOptions(select(), Config.rhythms.map(rhythm=>rhythm.name));
 	private _lastPresetCategoryCount: number = EditorConfig.presetCategories.length;
+	private _lastCustomPresetsJson: string = "";
 	private readonly _pitchedPresetSelect: HTMLSelectElement = buildPresetOptions(false);
 	private readonly _drumPresetSelect: HTMLSelectElement = buildPresetOptions(true);
 	private readonly _algorithmSelect: HTMLSelectElement = buildOptions(select(), Config.algorithms.map(algorithm=>algorithm.name));
@@ -448,19 +464,25 @@ export class SongEditor {
 		this._patternEditorNext.container,
 	);
 	private readonly _patternArea: HTMLDivElement = div({class: "pattern-area"},
+		this._chordDetector.container,
 		this._piano.container,
 		this._patternEditorRow,
 		this._octaveScrollBar.container,
 		this._zoomInButton,
 		this._zoomOutButton,
 	);
+	private readonly _groupSectionBar: GroupSectionBar = new GroupSectionBar(this.doc);
 	private readonly _trackContainer: HTMLDivElement = div({class: "trackContainer noSelection"},
+		this._groupSectionBar.trackContainer,
 		this._trackEditor.container,
 		this._loopEditor.container,
 	);
 	private readonly _trackVisibleArea: HTMLDivElement = div({style: "position: absolute; width: 100%; height: 100%; pointer-events: none;"});
 	private readonly _trackAndMuteContainer: HTMLDivElement = div({class: "trackAndMuteContainer prefers-big-scrollbars"},
-		this._muteEditor.container,
+		div({style: "display: flex; flex-direction: column;"},
+			this._groupSectionBar.headerContainer,
+			this._muteEditor.container,
+		),
 		this._trackContainer,
 		this._trackVisibleArea,
 	);
@@ -504,6 +526,10 @@ export class SongEditor {
 			div({class: "selectRow"},
 				span({class: "tip", onclick: ()=>this._openPrompt("rhythm")}, "Rhythm:"),
 				div({class: "selectContainer"}, this._rhythmSelect),
+			),
+			div({class: "selectRow"},
+				span({class: "tip", title: "Custom name for active channel"}, "Ch Name:"),
+				this._channelNameInput,
 			),
 		),
 	);
@@ -557,6 +583,7 @@ export class SongEditor {
 	private readonly _operatorRows: HTMLDivElement[] = []
 	private readonly _operatorAmplitudeSliders: Slider[] = []
 	private readonly _operatorFrequencySelects: HTMLSelectElement[] = []
+	private readonly _operatorWaveSelects: HTMLSelectElement[] = []
 	private readonly _drumsetSpectrumEditors: SpectrumEditor[] = [];
 	private readonly _drumsetEnvelopeSelects: HTMLSelectElement[] = [];
 	
@@ -583,16 +610,19 @@ export class SongEditor {
 		
 		this._phaseModGroup.appendChild(div({class: "selectRow", style: `color: ${ColorConfig.secondaryText}; height: 1em; margin-top: 0.5em;`},
 			div({style: "margin-right: .1em; visibility: hidden;"}, 1 + "."),
+			div({style: "width: 3.5em; margin-right: .2em;", class: "tip"}, "Wave:"),
 			div({style: "width: 3em; margin-right: .3em;", class: "tip", onclick: ()=>this._openPrompt("operatorFrequency")}, "Freq:"),
 			div({class: "tip", onclick: ()=>this._openPrompt("operatorVolume")}, "Volume:"),
 		));
 		for (let i: number = 0; i < Config.operatorCount; i++) {
 			const operatorIndex: number = i;
 			const operatorNumber: HTMLDivElement = div({style: `margin-right: .1em; color: ${ColorConfig.secondaryText};`}, i + 1 + ".");
+			const waveSelect: HTMLSelectElement = buildOptions(select({style: "width: 100%;", title: "Waveform"}), Config.operatorWaves);
 			const frequencySelect: HTMLSelectElement = buildOptions(select({style: "width: 100%;", title: "Frequency"}), Config.operatorFrequencies.map(freq=>freq.name));
 			const amplitudeSlider: Slider = new Slider(input({type: "range", min: "0", max: Config.operatorAmplitudeMax, value: "0", step: "1", title: "Volume"}), this.doc, (oldValue: number, newValue: number) => new ChangeOperatorAmplitude(this.doc, operatorIndex, oldValue, newValue));
 			const row: HTMLDivElement = div({class: "selectRow"},
 				operatorNumber,
+				div({class: "selectContainer", style: "width: 3.5em; margin-right: .2em;"}, waveSelect),
 				div({class: "selectContainer", style: "width: 3em; margin-right: .3em;"}, frequencySelect),
 				amplitudeSlider.container,
 			);
@@ -600,7 +630,11 @@ export class SongEditor {
 			this._operatorRows[i] = row;
 			this._operatorAmplitudeSliders[i] = amplitudeSlider;
 			this._operatorFrequencySelects[i] = frequencySelect;
+			this._operatorWaveSelects[i] = waveSelect;
 			
+			waveSelect.addEventListener("change", () => {
+				this.doc.record(new ChangeOperatorWave(this.doc, operatorIndex, waveSelect.selectedIndex));
+			});
 			frequencySelect.addEventListener("change", () => {
 				this.doc.record(new ChangeOperatorFrequency(this.doc, operatorIndex, frequencySelect.selectedIndex));
 			});
@@ -638,6 +672,9 @@ export class SongEditor {
 		this._scaleSelect.addEventListener("change", this._whenSetScale);
 		this._keySelect.addEventListener("change", this._whenSetKey);
 		this._rhythmSelect.addEventListener("change", this._whenSetRhythm);
+		this._channelNameInput.addEventListener("change", () => {
+			this.doc.record(new ChangeChannelName(this.doc, this.doc.channel, this._channelNameInput.value.trim()));
+		});
 		this._pitchedPresetSelect.addEventListener("change", this._whenSetPitchedPreset);
 		this._drumPresetSelect.addEventListener("change", this._whenSetDrumPreset);
 		this._algorithmSelect.addEventListener("change", this._whenSetAlgorithm);
@@ -817,6 +854,19 @@ export class SongEditor {
 				case "recordingSetup":
 					this.prompt = new RecordingSetupPrompt(this.doc);
 					break;
+				case "tempo":
+				case "barTempo":
+					this.prompt = new TempoPrompt(this.doc);
+					break;
+				case "aiGenerateSection":
+					this.prompt = new AIGenerateSectionPrompt(this.doc);
+					break;
+				case "aiAutoSection":
+					this.prompt = new AIAutoSectionPrompt(this.doc);
+					break;
+				case "markMovement":
+					this.prompt = new MovementPrompt(this.doc);
+					break;
 				case "stringSustain":
 					this.prompt = new SustainPrompt(this.doc);
 					break;
@@ -851,11 +901,17 @@ export class SongEditor {
 	public whenUpdated = (): void => {
 		const prefs: Preferences = this.doc.prefs;
 		this._muteEditor.container.style.display = prefs.enableChannelMuting ? "" : "none";
-		this.doc.trackVisibleBars = Math.floor((this._trackVisibleArea.clientWidth - (prefs.enableChannelMuting ? 32 : 0)) / this.doc.getBarWidth());
+		this.doc.trackVisibleBars = Math.floor((this._trackVisibleArea.clientWidth - (prefs.enableChannelMuting ? 110 : 0)) / this.doc.getBarWidth());
 		this.doc.trackVisibleChannels = Math.floor((this._trackVisibleArea.clientHeight - 30) / ChannelRow.patternHeight);
 		this._barScrollBar.render();
 		this._muteEditor.render();
 		this._trackEditor.render();
+		this._groupSectionBar.render();
+		
+		if (document.activeElement !== this._channelNameInput) {
+			const activeChan = this.doc.song ? this.doc.song.channels[this.doc.channel] : null;
+			this._channelNameInput.value = activeChan ? activeChan.name || "" : "";
+		}
 		
 		this._trackAndMuteContainer.scrollLeft = this.doc.barScrollPos * this.doc.getBarWidth();
 		this._trackAndMuteContainer.scrollTop = this.doc.channelScrollPos * ChannelRow.patternHeight;
@@ -946,8 +1002,10 @@ export class SongEditor {
 		this._tempoStepper.value = this.doc.song.tempo.toString();
 		setSelectedValue(this._rhythmSelect, this.doc.song.rhythm);
 		
-		if (this._lastPresetCategoryCount != EditorConfig.presetCategories.length) {
+		const currentCustomPresetsJson: string = CustomPresetManager.exportPresetsJson();
+		if (this._lastPresetCategoryCount != EditorConfig.presetCategories.length || this._lastCustomPresetsJson != currentCustomPresetsJson) {
 			this._lastPresetCategoryCount = EditorConfig.presetCategories.length;
+			this._lastCustomPresetsJson = currentCustomPresetsJson;
 			populatePresetOptions(this._pitchedPresetSelect, false);
 			populatePresetOptions(this._drumPresetSelect, true);
 		}
@@ -1039,6 +1097,7 @@ export class SongEditor {
 				for (let i: number = 0; i < Config.operatorCount; i++) {
 					const isCarrier: boolean = (i < Config.algorithms[instrument.algorithm].carrierCount);
 					this._operatorRows[i].style.color = isCarrier ? ColorConfig.primaryText : "";
+					setSelectedValue(this._operatorWaveSelects[i], instrument.operators[i].wave || 0);
 					setSelectedValue(this._operatorFrequencySelects[i], instrument.operators[i].frequency);
 					this._operatorAmplitudeSliders[i].updateValue(instrument.operators[i].amplitude);
 					const operatorName: string = (isCarrier ? "Voice " : "Modulator ") + (i + 1);
@@ -1550,6 +1609,12 @@ export class SongEditor {
 					if (this.doc.prefs.autoFollow) {
 						this.doc.selection.setChannelBar(this.doc.channel, Math.floor(this.doc.synth.playhead));
 					}
+					event.preventDefault();
+				}
+				break;
+			case 71: // g
+				if (event.ctrlKey || event.metaKey || event.shiftKey || !canPlayNotes) {
+					SectionManager.autoGroupSelection(this.doc);
 					event.preventDefault();
 				}
 				break;
@@ -2152,11 +2217,30 @@ export class SongEditor {
 			case "barCount":
 				this._openPrompt("barCount");
 				break;
+			case "tempo":
+				this._openPrompt("tempo");
+				break;
 			case "beatsPerBar":
 				this._openPrompt("beatsPerBar");
 				break;
 			case "moveNotesSideways":
 				this._openPrompt("moveNotesSideways");
+				break;
+			case "groupSection":
+				SectionManager.autoGroupSelection(this.doc);
+				break;
+			case "markMovement":
+				this._openPrompt("markMovement");
+				break;
+			case "aiGenerateSection":
+				this._openPrompt("aiGenerateSection");
+				break;
+			case "aiAutoSection":
+				this._openPrompt("aiAutoSection");
+				break;
+			case "clearSections":
+				SectionManager.clearSections();
+				this.doc.notifier.changed();
 				break;
 			case "channelSettings":
 				this._openPrompt("channelSettings");

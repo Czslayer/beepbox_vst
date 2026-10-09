@@ -544,6 +544,7 @@ export class Pattern {
 export class Operator {
 	public frequency: number = 0;
 	public amplitude: number = 0;
+	public wave: number = 0;
 	
 	constructor(index: number) {
 		this.reset(index);
@@ -552,6 +553,7 @@ export class Operator {
 	public reset(index: number): void {
 		this.frequency = 0;
 		this.amplitude = (index <= 1) ? Config.operatorAmplitudeMax : 0;
+		this.wave = 0;
 	}
 }
 
@@ -1353,6 +1355,7 @@ export class Instrument {
 				operatorArray.push({
 					"frequency": Config.operatorFrequencies[operator.frequency].name,
 					"amplitude": operator.amplitude,
+					"wave": operator.wave || 0,
 				});
 			}
 			instrumentObject["algorithm"] = Config.algorithms[this.algorithm].name;
@@ -1678,6 +1681,11 @@ export class Instrument {
 				} else {
 					operator.amplitude = 0;
 				}
+				if (operatorObject["wave"] != undefined) {
+					operator.wave = clamp(0, Config.operatorWaves.length - 1, operatorObject["wave"] | 0);
+				} else {
+					operator.wave = 0;
+				}
 			}
 		}
 		
@@ -1829,6 +1837,7 @@ export class Instrument {
 }
 
 export class Channel {
+	public name: string = "";
 	public octave: number = 0;
 	public readonly instruments: Instrument[] = [];
 	public readonly patterns: Pattern[] = [];
@@ -1844,6 +1853,7 @@ export class Song {
 	public scale: number;
 	public key: number;
 	public tempo: number;
+	public barTempos: number[] = [];
 	public beatsPerBar: number;
 	public barBeats: number[] = [];
 	public barCount: number;
@@ -1897,6 +1907,16 @@ export class Song {
 			}
 		}
 		return this.beatsPerBar;
+	}
+	
+	public getTempoForBar(bar?: number): number {
+		if (bar !== undefined && this.barTempos != null && this.barTempos.length > 0) {
+			const b = Math.floor(bar);
+			if (b >= 0 && b < this.barTempos.length && this.barTempos[b] > 0) {
+				return this.barTempos[b];
+			}
+		}
+		return this.tempo;
 	}
 	
 	public initToDefault(andResetChannels: boolean = true): void {
@@ -3396,6 +3416,7 @@ export class Song {
 			
 			const channelObject: any = {
 				"type": isNoiseChannel ? "drum" : "pitch",
+				"name": channel.name || "",
 				"instruments": instrumentArray,
 				"patterns": patternArray,
 				"sequence": sequenceArray,
@@ -3418,6 +3439,7 @@ export class Song {
 			"barBeats": this.barBeats,
 			"ticksPerBeat": Config.rhythms[this.rhythm].stepsPerBeat,
 			"beatsPerMinute": this.tempo,
+			"barTempos": this.barTempos,
 			//"patternCount": this.patternsPerChannel, // derive this from pattern arrays.
 			"layeredInstruments": this.layeredInstruments,
 			"patternInstruments": this.patternInstruments,
@@ -3481,6 +3503,9 @@ export class Song {
 		if (jsonObject["barBeats"] != undefined && Array.isArray(jsonObject["barBeats"])) {
 			this.barBeats = jsonObject["barBeats"].map((x: any) => Math.max(Config.beatsPerBarMin, Math.min(Config.beatsPerBarMax, x | 0)));
 		}
+		if (jsonObject["barTempos"] != undefined && Array.isArray(jsonObject["barTempos"])) {
+			this.barTempos = jsonObject["barTempos"].map((x: any) => Math.max(Config.tempoMin, Math.min(Config.tempoMax, x | 0)));
+		}
 		
 		let importedPartsPerBeat: number = 4;
 		if (jsonObject["ticksPerBeat"] != undefined) {
@@ -3529,6 +3554,9 @@ export class Song {
 				let channelObject: any = jsonObject["channels"][channelIndex];
 				
 				const channel: Channel = new Channel();
+				if (typeof channelObject["name"] === "string") {
+					channel.name = channelObject["name"];
+				}
 				
 				let isNoiseChannel: boolean = false;
 				if (channelObject["type"] != undefined) {
@@ -4795,6 +4823,8 @@ export class Synth {
 	public liveInputPitches: number[] = [];
 	public liveInputChannel: number = 0;
 	public liveInputInstruments: number[] = [];
+	public liveInputPitchBend: number = 0.0;
+	public liveInputModulation: number = 0.0;
 	public loopRepeatCount: number = -1;
 	public volume: number = 1.0;
 	public enableMetronome: boolean = false;
@@ -6026,6 +6056,22 @@ export class Synth {
 			intervalEnd   += vibratoEnd;
 		}
 		
+		if (channelIndex == this.liveInputChannel || tone.note == null) {
+			if (this.liveInputPitchBend != 0.0) {
+				intervalStart += this.liveInputPitchBend;
+				intervalEnd   += this.liveInputPitchBend;
+			}
+			if (this.liveInputModulation > 0.0) {
+				const modTimeStart: number = secondsPerPart * partTimeStart;
+				const modTimeEnd:   number = secondsPerPart * partTimeEnd;
+				const modLfoStart:  number = Math.sin(modTimeStart * 2.0 * Math.PI * 6.0);
+				const modLfoEnd:    number = Math.sin(modTimeEnd   * 2.0 * Math.PI * 6.0);
+				const modAmount:    number = this.liveInputModulation * 0.8;
+				intervalStart += modLfoStart * modAmount;
+				intervalEnd   += modLfoEnd   * modAmount;
+			}
+		}
+		
 		if ((!transition.isSeamless && !tone.forceContinueAtStart) || tone.prevNote == null) {
 			// Fade in the beginning of the note.
 			const fadeInSeconds: number = instrument.getFadeInSeconds();
@@ -6483,7 +6529,8 @@ export class Synth {
 		if (instrument.type == InstrumentType.fm) {
 			const algoIndex = Math.max(0, Math.min(Config.algorithms.length - 1, instrument.algorithm || 0));
 			const feedbackIndex = Math.max(0, Math.min(Config.feedbacks.length - 1, instrument.feedbackType || 0));
-			const fingerprint: string = algoIndex + "_" + feedbackIndex;
+			const waveFingerprint = instrument.operators.map(op => op.wave || 0).join("_");
+			const fingerprint: string = algoIndex + "_" + feedbackIndex + "_" + waveFingerprint;
 			if (Synth.fmSynthFunctionCache[fingerprint] == undefined) {
 				const synthSource: string[] = [];
 				const algo = Config.algorithms[algoIndex] ?? Config.algorithms[0];
@@ -6499,7 +6546,34 @@ export class Synth {
 						synthSource.push(line.replace("/*operator#Scaled*/", outputs.join(" + ")));
 					} else if (line.indexOf("// INSERT OPERATOR COMPUTATION HERE") != -1) {
 						for (let j: number = Config.operatorCount - 1; j >= 0; j--) {
-							for (const operatorLine of Synth.operatorSourceTemplate) {
+							const opWave = instrument.operators[j]?.wave || 0;
+							let operatorTemplateLines: string[];
+							if (opWave === 1) { // Triangle
+								operatorTemplateLines = [
+									"			const operator#PhaseMix = operator#Phase/* + operator@Scaled*/;",
+									"			const operator#Norm = ((operator#PhaseMix % " + Config.sineWaveLength + ") / " + Config.sineWaveLength + ");",
+									"			operator#Output = Math.abs(operator#Norm * 4.0 - 2.0) - 1.0;",
+									"			const operator#Scaled = operator#OutputMult * operator#Output;"
+								];
+							} else if (opWave === 2) { // Saw
+								operatorTemplateLines = [
+									"			const operator#PhaseMix = operator#Phase/* + operator@Scaled*/;",
+									"			const operator#Norm = ((operator#PhaseMix % " + Config.sineWaveLength + ") / " + Config.sineWaveLength + ");",
+									"			operator#Output = 1.0 - operator#Norm * 2.0;",
+									"			const operator#Scaled = operator#OutputMult * operator#Output;"
+								];
+							} else if (opWave === 3) { // Square
+								operatorTemplateLines = [
+									"			const operator#PhaseMix = operator#Phase/* + operator@Scaled*/;",
+									"			const operator#Norm = ((operator#PhaseMix % " + Config.sineWaveLength + ") / " + Config.sineWaveLength + ");",
+									"			operator#Output = operator#Norm < 0.5 ? 1.0 : -1.0;",
+									"			const operator#Scaled = operator#OutputMult * operator#Output;"
+								];
+							} else { // Sine (0)
+								operatorTemplateLines = Synth.operatorSourceTemplate;
+							}
+
+							for (const operatorLine of operatorTemplateLines) {
 								if (operatorLine.indexOf("/* + operator@Scaled*/") != -1) {
 									let modulators = "";
 									if (algo && algo.modulatedBy && algo.modulatedBy[j]) {
@@ -8037,7 +8111,7 @@ export class Synth {
 	
 	private getSamplesPerTick(): number {
 		if (this.song == null) return 0;
-		const beatsPerMinute: number = this.song.getBeatsPerMinute();
+		const beatsPerMinute: number = this.song.getTempoForBar(this.bar);
 		const beatsPerSecond: number = beatsPerMinute / 60.0;
 		const partsPerSecond: number = Config.partsPerBeat * beatsPerSecond;
 		const ticksPerSecond: number = Config.ticksPerPart * partsPerSecond;

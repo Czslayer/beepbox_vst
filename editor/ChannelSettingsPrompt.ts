@@ -5,7 +5,7 @@ import {HTML} from "imperative-html/dist/esm/elements-strict.js";
 import {SongDocument} from "./SongDocument.js";
 import {Prompt} from "./Prompt.js";
 import {ChangeGroup} from "./Change.js";
-import {ChangePatternsPerChannel, ChangeInstrumentsFlags, ChangeChannelCount} from "./changes.js";
+import {ChangePatternsPerChannel, ChangeInstrumentsFlags, ChangeChannelCount, ChangeChannelName} from "./changes.js";
 
 const {button, div, label, br, h2, input} = HTML;
 
@@ -15,10 +15,12 @@ export class ChannelSettingsPrompt implements Prompt {
 	private readonly _drumChannelStepper: HTMLInputElement = input({style: "width: 3em; margin-left: 1em;", type: "number", step: "1"});
 	private readonly _layeredInstrumentsBox: HTMLInputElement = input({style: "width: 3em; margin-left: 1em;", type: "checkbox"});
 	private readonly _patternInstrumentsBox: HTMLInputElement = input({style: "width: 3em; margin-left: 1em;", type: "checkbox"});
+	private readonly _channelNameInputs: HTMLInputElement[] = [];
+	private readonly _channelNamesContainer: HTMLDivElement = div({style: "margin: 8px 0; text-align: left; max-height: 120px; overflow-y: auto; padding: 4px; background: rgba(0,0,0,0.2); border-radius: 4px;"});
 	private readonly _cancelButton: HTMLButtonElement = button({class: "cancelButton"});
 	private readonly _okayButton: HTMLButtonElement = button({class: "okayButton", style: "width:45%;"}, "Okay");
 	
-	public readonly container: HTMLDivElement = div({class: "prompt noSelection", style: "width: 250px; text-align: right;"},
+	public readonly container: HTMLDivElement = div({class: "prompt noSelection", style: "width: 270px; text-align: right;"},
 		h2("Channel Settings"),
 		label({style: "display: flex; flex-direction: row; align-items: center; height: 2em; justify-content: flex-end;"},
 			"Pitch channels:",
@@ -44,6 +46,8 @@ export class ChannelSettingsPrompt implements Prompt {
 			"per pattern:",
 			this._patternInstrumentsBox,
 		),
+		div({style: "text-align: left; font-weight: bold; margin-top: 6px; font-size: 11px;"}, "Channel Names:"),
+		this._channelNamesContainer,
 		div({style: "display: flex; flex-direction: row-reverse; justify-content: space-between;"},
 			this._okayButton,
 		),
@@ -65,6 +69,26 @@ export class ChannelSettingsPrompt implements Prompt {
 		
 		this._layeredInstrumentsBox.checked = this._doc.song.layeredInstruments;
 		this._patternInstrumentsBox.checked = this._doc.song.patternInstruments;
+		
+		for (let i = 0; i < this._doc.song.getChannelCount(); i++) {
+			const channel = this._doc.song.channels[i];
+			const isNoise = this._doc.song.getChannelIsNoise(i);
+			const labelText = isNoise ? `🥁 Drum Ch ${i + 1}:` : `🎹 Pitch Ch ${i + 1}:`;
+			const placeholder = i === 0 ? "Lead / Pad" : i === 1 ? "Organ / Chords" : i === 2 ? "Bass / Fretless Bass" : "";
+			const nameInput = input({
+				type: "text",
+				value: channel.name || "",
+				placeholder,
+				style: "width: 110px; margin-left: 6px; padding: 2px 4px; font-size: 11px;"
+			});
+			this._channelNameInputs.push(nameInput);
+			this._channelNamesContainer.appendChild(
+				label({style: "display: flex; flex-direction: row; align-items: center; justify-content: space-between; margin: 3px 0; font-size: 11px;"},
+					labelText,
+					nameInput
+				)
+			);
+		}
 		
 		this._pitchChannelStepper.select();
 		setTimeout(()=>this._pitchChannelStepper.focus());
@@ -125,6 +149,9 @@ export class ChannelSettingsPrompt implements Prompt {
 		group.append(new ChangeInstrumentsFlags(this._doc, this._layeredInstrumentsBox.checked, this._patternInstrumentsBox.checked));
 		group.append(new ChangePatternsPerChannel(this._doc, ChannelSettingsPrompt._validate(this._patternsStepper)));
 		group.append(new ChangeChannelCount(this._doc, ChannelSettingsPrompt._validate(this._pitchChannelStepper), ChannelSettingsPrompt._validate(this._drumChannelStepper)));
+		for (let i = 0; i < this._channelNameInputs.length && i < this._doc.song.getChannelCount(); i++) {
+			group.append(new ChangeChannelName(this._doc, i, this._channelNameInputs[i].value.trim()));
+		}
 		this._doc.prompt = null;
 		this._doc.record(group, true);
 	}

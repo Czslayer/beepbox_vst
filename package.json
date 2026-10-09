@@ -19,6 +19,7 @@
 		"prepublishOnly": "echo \"Use 'npm run publish' instead!\" && exit 1"
 	},
 	"dependencies": {
+		"@google/genai": "^2.27.0",
 		"express": "^4.19.2",
 		"imperative-html": "^0.1.2"
 	},

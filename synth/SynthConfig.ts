@@ -512,6 +512,7 @@ export class Config {
 	public static readonly stringDecayRate: number = 0.12;
 	public static readonly enableAcousticSustain: boolean = false;
 	public static readonly sustainTypeNames: ReadonlyArray<string> = ["bright", "acoustic"]; // See SustainType enum above.
+	public static readonly operatorWaves: ReadonlyArray<string> = ["Sine", "Triangle", "Saw", "Square"];
 	
 	public static readonly distortionRange: number = 8;
 	public static readonly bitcrusherFreqRange: number = 14;

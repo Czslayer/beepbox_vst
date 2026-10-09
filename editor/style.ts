@@ -1107,7 +1107,7 @@ document.head.appendChild(HTML.style({type: "text/css"}, `
 }
 
 .beepboxEditor .muteEditor {
-	width: 32px;
+	width: 110px;
 	flex-shrink: 0;
 	display: flex;
 	flex-direction: column;

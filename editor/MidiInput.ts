@@ -2,7 +2,7 @@
 
 import {Config} from "../synth/SynthConfig.js";
 import {SongDocument} from "./SongDocument.js";
-import {AnalogousDrum, analogousDrumMap, MidiEventType} from "./Midi.js";
+import {AnalogousDrum, analogousDrumMap, MidiEventType, MidiControlEventMessage} from "./Midi.js";
 
 declare global {
 	interface Navigator {
@@ -90,6 +90,30 @@ export class MidiInputHandler {
 		let [eventType, key, velocity] = event.data;
 		eventType &= 0xF0;
 		
+		if (eventType == MidiEventType.pitchBend) {
+			// pitchBend: key is LSB (7 bits), velocity is MSB (7 bits)
+			const pitchBend14Bit = ((velocity & 0x7F) << 7) | (key & 0x7F);
+			const normalizedBend = (pitchBend14Bit - 8192) / 8192.0; // -1.0 to +1.0
+			const bendSemitones = normalizedBend * 2.0; // Standard +/-2 semitones pitch bend range
+			this._doc.synth.liveInputPitchBend = bendSemitones;
+			this._doc.synth.maintainLiveInput();
+			return;
+		}
+		
+		if (eventType == MidiEventType.controlChange) {
+			const controllerNumber = key;
+			const controllerValue = velocity;
+			if (controllerNumber == MidiControlEventMessage.modulationWheel || controllerNumber == 0x01) {
+				const modValue = controllerValue / 127.0; // 0.0 to 1.0
+				this._doc.synth.liveInputModulation = modValue;
+				this._doc.synth.maintainLiveInput();
+			} else if (controllerNumber == MidiControlEventMessage.sustainPedal || controllerNumber == 0x40) {
+				const isSustainDown = controllerValue >= 64;
+				this._doc.performance.setSustainPedal(isSustainDown);
+			}
+			return;
+		}
+
 		if (isDrum) {
 			const drum: AnalogousDrum | undefined = analogousDrumMap[key];
 			if (drum != undefined) {

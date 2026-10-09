@@ -469,18 +469,17 @@ export class ChangeLoadChannelPreset extends Change {
 			doc.song.layeredInstruments = true;
 		}
 
-		if (doc.song.patternInstruments) {
-			for (const pattern of channel.patterns) {
-				for (let i = 0; i < pattern.instruments.length; i++) {
-					if (pattern.instruments[i] >= channel.instruments.length) {
-						pattern.instruments[i] = 0;
-					}
-				}
-				if (pattern.instruments.length === 0) {
-					pattern.instruments.length = 0;
-					pattern.instruments.push(0);
-				}
-			}
+		const newInstIndices: number[] = [];
+		for (let i = 0; i < channel.instruments.length; i++) {
+			newInstIndices.push(i);
+		}
+
+		for (const pattern of channel.patterns) {
+			pattern.instruments.length = 0;
+			pattern.instruments.push(...newInstIndices);
+		}
+		if (doc.recentPatternInstruments[doc.channel]) {
+			doc.recentPatternInstruments[doc.channel] = newInstIndices.concat();
 		}
 
 		doc.viewedInstrument[doc.channel] = 0;
@@ -1687,6 +1686,20 @@ export class ChangeOperatorFrequency extends Change {
 	}
 }
 
+export class ChangeOperatorWave extends Change {
+	constructor(doc: SongDocument, operatorIndex: number, newValue: number) {
+		super();
+		const instrument: Instrument = doc.song.channels[doc.channel].instruments[doc.getCurrentInstrument()];
+		const oldValue: number = instrument.operators[operatorIndex].wave || 0;
+		if (oldValue != newValue) {
+			instrument.operators[operatorIndex].wave = newValue;
+			instrument.preset = instrument.type;
+			doc.notifier.changed();
+			this._didSomething();
+		}
+	}
+}
+
 export class ChangeOperatorAmplitude extends ChangeInstrumentSlider {
 	constructor(doc: SongDocument, operatorIndex: number, oldValue: number, newValue: number) {
 		super(doc);
@@ -2618,6 +2631,33 @@ export class ChangeTempo extends Change {
 	}
 }
 
+export class ChangeTempoForBar extends Change {
+	constructor(doc: SongDocument, startBar: number, endBar: number, newTempo: number) {
+		super();
+		if (doc.song.barTempos == null) {
+			doc.song.barTempos = [];
+		}
+		let changed = false;
+		for (let b = startBar; b <= endBar; b++) {
+			const oldTempo = doc.song.getTempoForBar(b);
+			doc.song.barTempos[b] = Math.max(Config.tempoMin, Math.min(Config.tempoMax, Math.round(newTempo)));
+			if (oldTempo !== doc.song.barTempos[b]) changed = true;
+		}
+		doc.notifier.changed();
+		if (changed) this._didSomething();
+	}
+}
+
+export class ChangeResetBarTempos extends Change {
+	constructor(doc: SongDocument) {
+		super();
+		const hadTempos = doc.song.barTempos && doc.song.barTempos.length > 0;
+		doc.song.barTempos = [];
+		doc.notifier.changed();
+		if (hadTempos) this._didSomething();
+	}
+}
+
 export class ChangeEchoDelay extends ChangeInstrumentSlider {
 	constructor(doc: SongDocument, oldValue: number, newValue: number) {
 		super(doc);
@@ -3190,6 +3230,17 @@ export class ChangePatternScale extends Change {
 		}
 		this._didSomething();
 		doc.notifier.changed();
+	}
+}
+
+export class ChangeChannelName extends Change {
+	constructor(doc: SongDocument, channelIndex: number, newName: string) {
+		super();
+		if (doc.song.channels[channelIndex].name !== newName) {
+			doc.song.channels[channelIndex].name = newName;
+			doc.notifier.changed();
+			this._didSomething();
+		}
 	}
 }
 

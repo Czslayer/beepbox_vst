@@ -247,7 +247,30 @@ export class SongPerformance {
 		this._lowLatencyPreferredUntilTime = performance.now() + 10000.0;
 	}
 	
+	private _sustainPedalDown: boolean = false;
+	private readonly _heldPitches: Set<number> = new Set<number>();
+	private readonly _sustainedPitches: Set<number> = new Set<number>();
+
+	public setSustainPedal(down: boolean): void {
+		if (this._sustainPedalDown === down) return;
+		this._sustainPedalDown = down;
+		if (!down) {
+			const toRemove: number[] = [];
+			this._sustainedPitches.forEach((pitch) => {
+				if (!this._heldPitches.has(pitch)) {
+					toRemove.push(pitch);
+				}
+			});
+			for (const pitch of toRemove) {
+				this._sustainedPitches.delete(pitch);
+				this._removePerformedPitchInternal(pitch);
+			}
+		}
+	}
+
 	public addPerformedPitch(pitch: number): void {
+		this._heldPitches.add(pitch);
+		this._sustainedPitches.delete(pitch);
 		this._doc.synth.maintainLiveInput();
 		this._updateRecordedNotes();
 		if (this._pitchesAreTemporary) {
@@ -280,6 +303,15 @@ export class SongPerformance {
 	}
 	
 	public removePerformedPitch(pitch: number): void {
+		this._heldPitches.delete(pitch);
+		if (this._sustainPedalDown) {
+			this._sustainedPitches.add(pitch);
+		} else {
+			this._removePerformedPitchInternal(pitch);
+		}
+	}
+
+	private _removePerformedPitchInternal(pitch: number): void {
 		this._updateRecordedNotes();
 		for (let i: number = 0; i < this._doc.synth.liveInputPitches.length; i++) {
 			if (this._doc.synth.liveInputPitches[i] == pitch) {
@@ -292,7 +324,12 @@ export class SongPerformance {
 	
 	public clearAllPitches(): void {
 		this._updateRecordedNotes();
+		this._heldPitches.clear();
+		this._sustainedPitches.clear();
+		this._sustainPedalDown = false;
 		this._doc.synth.liveInputPitches.length = 0;
+		this._doc.synth.liveInputPitchBend = 0.0;
+		this._doc.synth.liveInputModulation = 0.0;
 		this._pitchesChanged = true;
 	}
 	
