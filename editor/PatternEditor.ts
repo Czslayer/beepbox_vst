@@ -75,6 +75,7 @@ export class PatternEditor {
 	private _mouseYStart: number = 0;
 	private _ctrlHeld: boolean = false;
 	private _shiftHeld: boolean = false;
+	private _oHeld: boolean = false;
 	private _draggingStartOfSelection: boolean = false;
 	private _draggingEndOfSelection: boolean = false;
 	private _draggingSelectionContents: boolean = false;
@@ -128,6 +129,20 @@ export class PatternEditor {
 			this._svg.addEventListener("pointermove", this._onPointerMove);
 			this._svg.addEventListener("pointerup", this._onPointerUp);
 			this._svg.addEventListener("pointercancel", this._onPointerCancel);
+			window.addEventListener("keydown", (event: KeyboardEvent) => {
+				if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+				if (event.key == "o" || event.key == "O" || event.code == "KeyO") {
+					this._oHeld = true;
+				}
+			});
+			window.addEventListener("keyup", (event: KeyboardEvent) => {
+				if (event.key == "o" || event.key == "O" || event.code == "KeyO") {
+					this._oHeld = false;
+				}
+			});
+			window.addEventListener("blur", () => {
+				this._oHeld = false;
+			});
 		} else {
 			this._svgPlayhead.style.display = "none";
 			this._svg.appendChild(SVG.rect({x: 0, y: 0, width: 10000, height: 10000, fill: ColorConfig.editorBackground, style: "opacity: 0.5;"}));
@@ -177,22 +192,42 @@ export class PatternEditor {
 				Math.max(0, Math.min(partsPerPattern - minDivision, this._cursor.exactPart))
 			/ minDivision) * minDivision;
 		
-		if (this._pattern != null) {
+		let mousePitch: number = this._findMousePitch(this._mouseY);
+		
+		if (this._pattern != null && !this._oHeld) {
 			const cursorPartForMatching: number = Math.max(0, Math.min(partsPerPattern - 1, this._cursor.exactPart));
+			const candidates: Note[] = [];
 			for (const note of this._pattern.notes) {
 				if (note.end <= cursorPartForMatching) {
 					this._cursor.prevNote = note;
 					this._cursor.curIndex++;
 				} else if (note.start <= cursorPartForMatching && note.end > cursorPartForMatching) {
-					this._cursor.curNote = note;
+					candidates.push(note);
 				} else if (note.start > cursorPartForMatching) {
-					this._cursor.nextNote = note;
-					break;
+					if (this._cursor.nextNote == null) this._cursor.nextNote = note;
+				}
+			}
+
+			if (candidates.length > 0) {
+				let bestDist: number = Number.MAX_VALUE;
+				let bestNote: Note | null = null;
+				for (const cand of candidates) {
+					for (const p of cand.pitches) {
+						const dist: number = Math.abs(p + 0.5 - mousePitch);
+						if (dist < bestDist) {
+							bestDist = dist;
+							bestNote = cand;
+						}
+					}
+				}
+				if (bestDist <= 2.0 && bestNote != null) {
+					this._cursor.curNote = bestNote;
+					this._cursor.curIndex = this._pattern.notes.indexOf(bestNote);
+				} else {
+					this._cursor.curNote = null;
 				}
 			}
 		}
-		
-		let mousePitch: number = this._findMousePitch(this._mouseY);
 		
 		if (this._cursor.curNote != null) {
 			this._cursor.start = this._cursor.curNote.start;
@@ -289,28 +324,7 @@ export class PatternEditor {
 				}
 				this._cursor.start += Math.floor(modMouse / division) * division;
 			}
-			this._cursor.end = this._cursor.start + defaultLength;
-			let forceStart: number = 0;
-			let forceEnd: number = partsPerPattern;
-			if (this._cursor.prevNote != null) {
-				forceStart = this._cursor.prevNote.end;
-			}
-			if (this._cursor.nextNote != null) {
-				forceEnd   = this._cursor.nextNote.start;
-			}
-			if (this._cursor.start < forceStart) {
-				this._cursor.start = forceStart;
-				this._cursor.end = this._cursor.start + defaultLength;
-				if (this._cursor.end > forceEnd) {
-					this._cursor.end = forceEnd;
-				}
-			} else if (this._cursor.end > forceEnd) {
-				this._cursor.end = forceEnd;
-				this._cursor.start = this._cursor.end - defaultLength;
-				if (this._cursor.start < forceStart) {
-					this._cursor.start = forceStart;
-				}
-			}
+			this._cursor.end = Math.min(partsPerPattern, this._cursor.start + defaultLength);
 			if (this._cursor.start >= this._cursor.end) {
 				// Not a valid duration.
 				return;
@@ -516,7 +530,18 @@ export class PatternEditor {
 		sequence.append(new ChangeEnsurePatternExists(this._doc, this._doc.channel, this._doc.bar));
 		const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
 		if (pattern == null) throw new Error();
-		sequence.append(new ChangeNoteAdded(this._doc, pattern, note, this._cursor.curIndex));
+		if (!this._oHeld) {
+			sequence.append(new ChangeNoteTruncate(this._doc, pattern, note.start, note.end, undefined));
+		}
+		let insertIndex: number = 0;
+		for (let i: number = 0; i < pattern.notes.length; i++) {
+			if (pattern.notes[i].start > note.start) {
+				insertIndex = i;
+				break;
+			}
+			insertIndex = i + 1;
+		}
+		sequence.append(new ChangeNoteAdded(this._doc, pattern, note, insertIndex));
 		
 		if (this._doc.prefs.enableNotePreview && !this._doc.synth.playing) {
 			// Play the new note out loud if enabled.
@@ -710,10 +735,12 @@ export class PatternEditor {
 						sequence.append(new ChangeEnsurePatternExists(this._doc, this._doc.channel, this._doc.bar));
 						const pattern: Pattern | null = this._doc.getCurrentPattern(this._barOffset);
 						if (pattern == null) throw new Error();
-						sequence.append(new ChangeNoteTruncate(this._doc, pattern, start, end));
+						if (!this._oHeld) {
+							sequence.append(new ChangeNoteTruncate(this._doc, pattern, start, end, undefined));
+						}
 						let i: number;
 						for (i = 0; i < pattern.notes.length; i++) {
-							if (pattern.notes[i].start >= end) break;
+							if (pattern.notes[i].start > start) break;
 						}
 						const theNote: Note = new Note(this._cursor.pitch, start, end, Config.noteSizeMax, this._doc.song.getChannelIsNoise(this._doc.channel));
 						theNote.continuesLastPattern = continuesLastPattern;
@@ -743,7 +770,9 @@ export class PatternEditor {
 					if (shiftedTime <= this._cursor.curNote.start && this._cursor.nearPinIndex == this._cursor.curNote.pins.length - 1 ||
 						shiftedTime >= this._cursor.curNote.end   && this._cursor.nearPinIndex == 0)
 					{
-						sequence.append(new ChangeNoteAdded(this._doc, this._pattern, this._cursor.curNote, this._cursor.curIndex, true));
+						const noteIndex: number = this._pattern.notes.indexOf(this._cursor.curNote);
+						const deleteIndex: number = (noteIndex != -1) ? noteIndex : this._cursor.curIndex;
+						sequence.append(new ChangeNoteAdded(this._doc, this._pattern, this._cursor.curNote, deleteIndex, true));
 						
 						this._dragVisible = false;
 					} else {
@@ -755,7 +784,9 @@ export class PatternEditor {
 						this._dragSize = this._cursor.curNote.pins[this._cursor.nearPinIndex].size;
 						this._dragVisible = true;
 						
-						sequence.append(new ChangeNoteTruncate(this._doc, this._pattern, start, end, this._cursor.curNote));
+						if (!this._oHeld) {
+							sequence.append(new ChangeNoteTruncate(this._doc, this._pattern, start, end, this._cursor.curNote));
+						}
 						sequence.append(new ChangePinTime(this._doc, this._cursor.curNote, this._cursor.nearPinIndex, shiftedTime, continuesLastPattern));
 						this._copyPins(this._cursor.curNote);
 					}
@@ -811,11 +842,13 @@ export class PatternEditor {
 					}
 					if (bendEnd < 0) bendEnd = 0;
 					if (bendEnd > this._doc.song.beatsPerBar * Config.partsPerBeat) bendEnd = this._doc.song.beatsPerBar * Config.partsPerBeat;
-					if (bendEnd > this._cursor.curNote.end) {
-						sequence.append(new ChangeNoteTruncate(this._doc, this._pattern, this._cursor.curNote.start, bendEnd, this._cursor.curNote));
-					}
-					if (bendEnd < this._cursor.curNote.start) {
-						sequence.append(new ChangeNoteTruncate(this._doc, this._pattern, bendEnd, this._cursor.curNote.end, this._cursor.curNote));
+					if (!this._oHeld) {
+						if (bendEnd > this._cursor.curNote.end) {
+							sequence.append(new ChangeNoteTruncate(this._doc, this._pattern, this._cursor.curNote.start, bendEnd, this._cursor.curNote));
+						}
+						if (bendEnd < this._cursor.curNote.start) {
+							sequence.append(new ChangeNoteTruncate(this._doc, this._pattern, bendEnd, this._cursor.curNote.end, this._cursor.curNote));
+						}
 					}
 					
 					let minPitch: number = Number.MAX_VALUE;
@@ -887,9 +920,12 @@ export class PatternEditor {
 					}
 				} else {
 					if (this._cursor.curNote.pitches.length == 1) {
-						sequence.append(new ChangeNoteAdded(this._doc, this._pattern, this._cursor.curNote, this._cursor.curIndex, true));
+						const noteIndex: number = this._pattern.notes.indexOf(this._cursor.curNote);
+						const deleteIndex: number = (noteIndex != -1) ? noteIndex : this._cursor.curIndex;
+						sequence.append(new ChangeNoteAdded(this._doc, this._pattern, this._cursor.curNote, deleteIndex, true));
 					} else {
-						sequence.append(new ChangePitchAdded(this._doc, this._cursor.curNote, this._cursor.pitch, this._cursor.curNote.pitches.indexOf(this._cursor.pitch), true));
+						const pitchIndex: number = (this._cursor.pitchIndex != -1) ? this._cursor.pitchIndex : this._cursor.curNote.pitches.indexOf(this._cursor.pitch);
+						sequence.append(new ChangePitchAdded(this._doc, this._cursor.curNote, this._cursor.pitch, pitchIndex, true));
 					}
 				}
 				
@@ -1113,25 +1149,96 @@ export class PatternEditor {
 		}
 		
 		if (this._pattern != null) {
-			const instrument: Instrument = this._doc.song.channels[this._doc.channel].instruments[this._doc.getCurrentInstrument()];
+			const channel = this._doc.song.channels[this._doc.channel];
+			channel.syncSubChannels();
+			const barPatternIndex = channel.bars[this._doc.bar + this._barOffset];
+			const mainVoicePat = (barPatternIndex > 0 && channel.mainVoicePatterns[barPatternIndex - 1]) ? channel.mainVoicePatterns[barPatternIndex - 1] : null;
+
+			const subVoiceColors = [
+				{ primary: "#FF9A3C", secondary: "#C86000" }, // Voice 1: Orange/Coral
+				{ primary: "#FF60D0", secondary: "#C00090" }, // Voice 2: Neon Magenta
+				{ primary: "#B070FF", secondary: "#7020C0" }, // Voice 3: Electric Violet
+				{ primary: "#30F0B0", secondary: "#009060" }, // Voice 4: Mint
+				{ primary: "#FFD430", secondary: "#C09000" }, // Voice 5: Gold
+				{ primary: "#FF4D6D", secondary: "#B00020" }, // Voice 6: Ruby
+				{ primary: "#40A8FF", secondary: "#0060C0" }, // Voice 7: Sky Blue
+			];
+
+			const instrument: Instrument = channel.instruments[this._doc.getCurrentInstrument()];
 			const chord: Chord = instrument.getChord();
 			const transition: Transition = instrument.getTransition();
 			const displayNumberedChords: boolean = chord.customInterval || chord.arpeggiates || chord.strumParts > 0 || transition.slides;
+
 			for (const note of this._pattern.notes) {
+				let voiceIndex = 0; // 0 = main voice
+				if (mainVoicePat != null) {
+					const isMain = mainVoicePat.notes.some(mNote =>
+						mNote.start === note.start &&
+						mNote.end === note.end &&
+						mNote.pitches.length === note.pitches.length &&
+						mNote.pitches.every((p, idx) => p === note.pitches[idx])
+					);
+					if (!isMain) {
+						for (let v = 0; v < channel.subChannels.length; v++) {
+							const subNotes = channel.subChannels[v].patterns[barPatternIndex - 1]?.notes;
+							if (subNotes && subNotes.some(sNote =>
+								sNote.start === note.start &&
+								sNote.end === note.end &&
+								sNote.pitches.length === note.pitches.length &&
+								sNote.pitches.every((p, idx) => p === note.pitches[idx])
+							)) {
+								voiceIndex = v + 1;
+								break;
+							}
+						}
+						if (voiceIndex === 0) voiceIndex = 1;
+					}
+				}
+
+				const isSubChannel = voiceIndex > 0;
+				const primaryColor = isSubChannel
+					? subVoiceColors[(voiceIndex - 1) % subVoiceColors.length].primary
+					: ColorConfig.getChannelColor(this._doc.song, this._doc.channel).primaryNote;
+				const secondaryColor = isSubChannel
+					? subVoiceColors[(voiceIndex - 1) % subVoiceColors.length].secondary
+					: ColorConfig.getChannelColor(this._doc.song, this._doc.channel).secondaryNote;
+
 				for (let i: number = 0; i < note.pitches.length; i++) {
 					const pitch: number = note.pitches[i];
 					let notePath: SVGPathElement = SVG.path();
-					notePath.setAttribute("fill", ColorConfig.getChannelColor(this._doc.song, this._doc.channel).secondaryNote);
+					notePath.setAttribute("fill", secondaryColor);
 					notePath.setAttribute("pointer-events", "none");
 					this._drawNote(notePath, pitch, note.start, note.pins, this._pitchHeight / 2 + 1, false, this._octaveOffset);
 					this._svgNoteContainer.appendChild(notePath);
+
 					notePath = SVG.path();
-					notePath.setAttribute("fill", ColorConfig.getChannelColor(this._doc.song, this._doc.channel).primaryNote);
+					notePath.setAttribute("fill", primaryColor);
 					notePath.setAttribute("pointer-events", "none");
+					if (isSubChannel) {
+						notePath.setAttribute("stroke", "#FFFFFF");
+						notePath.setAttribute("stroke-width", "1.5");
+						notePath.setAttribute("stroke-dasharray", "3, 2");
+					}
 					this._drawNote(notePath, pitch, note.start, note.pins, this._pitchHeight / 2 + 1, true, this._octaveOffset);
 					this._svgNoteContainer.appendChild(notePath);
-					
+
 					let indicatorOffset: number = 2;
+
+					if (isSubChannel) {
+						const subTag: SVGTextElement = SVG.text();
+						subTag.setAttribute("x", "" + prettyNumber(this._partWidth * note.start + indicatorOffset));
+						subTag.setAttribute("y", "" + prettyNumber(this._pitchToPixelHeight(pitch - this._octaveOffset)));
+						subTag.setAttribute("font-size", "10");
+						subTag.setAttribute("font-weight", "bold");
+						subTag.setAttribute("fill", "#FFFFFF");
+						subTag.setAttribute("text-anchor", "start");
+						subTag.setAttribute("dominant-baseline", "central");
+						subTag.setAttribute("pointer-events", "none");
+						subTag.textContent = "S" + voiceIndex;
+						this._svgNoteContainer.appendChild(subTag);
+						indicatorOffset += 14;
+					}
+
 					if (note.continuesLastPattern) {
 						const arrowHeight: number = Math.min(this._pitchHeight, 20);
 						let arrowPath: string;
@@ -1148,7 +1255,7 @@ export class PatternEditor {
 						this._svgNoteContainer.appendChild(arrow);
 						indicatorOffset += 12;
 					}
-					
+
 					if (note.pitches.length > 1) {
 						if (displayNumberedChords) {
 							const oscillatorLabel: SVGTextElement = SVG.text();

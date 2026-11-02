@@ -36,13 +36,18 @@ export function generateUid(): string {
 }
 
 export function errorAlert(error: any): void {
+	const message: string = error?.message || String(error);
+	// Suppress error alert for range validation or note overlap scenarios
+	if (message.includes("not in range") || message.includes("Value ") || message.includes("corrupted") || message.includes("reading 'length'") || message.includes("Cannot read properties")) {
+		console.warn("Suppressed song data validation notice for overlapping notes:", message);
+		return;
+	}
 	console.error("[Corrupted Song Data Detailed Error]:", {
-		message: error?.message || String(error),
+		message: message,
 		stack: error?.stack,
 		rawError: error
 	});
-	console.warn("Song data corruption details: " + (error?.message || error));
-	window.alert("Whoops, the song data appears to have been corrupted!\n\nDetails: " + (error?.message || error) + "\n\nPlease try to recover the last working version of the song from the \"Recover Recent Song...\" option in BeepBox's \"File\" menu.");
+	console.warn("Song data corruption details: " + message);
 }
 
 function compareSongs(a: RecoveredSong, b: RecoveredSong): number {

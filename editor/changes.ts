@@ -1841,7 +1841,8 @@ export class ChangePitchAdded extends UndoableChange {
 		this._doc = doc;
 		this._note = note;
 		this._pitch = pitch;
-		this._index = index;
+		const actualIndex: number = note.pitches.indexOf(pitch);
+		this._index = (deletion && actualIndex != -1) ? actualIndex : index;
 		this._didSomething();
 		this.redo();
 	}
@@ -2699,23 +2700,49 @@ export class ChangeNoteAdded extends UndoableChange {
 	private _pattern: Pattern;
 	private _note: Note;
 	private _index: number;
+	private _deletion: boolean;
 	constructor(doc: SongDocument, pattern: Pattern, note: Note, index: number, deletion: boolean = false) {
 		super(deletion);
 		this._doc = doc;
 		this._pattern = pattern;
 		this._note = note;
+		this._deletion = deletion;
 		this._index = index;
 		this._didSomething();
 		this.redo();
 	}
 	
 	protected _doForwards(): void {
-		this._pattern.notes.splice(this._index, 0, this._note);
+		if (this._deletion) {
+			const actualIndex: number = this._pattern.notes.indexOf(this._note);
+			if (actualIndex != -1) {
+				this._pattern.notes.splice(actualIndex, 1);
+			} else if (this._index >= 0 && this._index < this._pattern.notes.length) {
+				this._pattern.notes.splice(this._index, 1);
+			}
+		} else {
+			if (this._pattern.notes.indexOf(this._note) == -1) {
+				const insertIdx: number = Math.min(Math.max(0, this._index), this._pattern.notes.length);
+				this._pattern.notes.splice(insertIdx, 0, this._note);
+			}
+		}
 		this._doc.notifier.changed();
 	}
 	
 	protected _doBackwards(): void {
-		this._pattern.notes.splice(this._index, 1);
+		if (this._deletion) {
+			if (this._pattern.notes.indexOf(this._note) == -1) {
+				const insertIdx: number = Math.min(Math.max(0, this._index), this._pattern.notes.length);
+				this._pattern.notes.splice(insertIdx, 0, this._note);
+			}
+		} else {
+			const actualIndex: number = this._pattern.notes.indexOf(this._note);
+			if (actualIndex != -1) {
+				this._pattern.notes.splice(actualIndex, 1);
+			} else if (this._index >= 0 && this._index < this._pattern.notes.length) {
+				this._pattern.notes.splice(this._index, 1);
+			}
+		}
 		this._doc.notifier.changed();
 	}
 }
@@ -2762,7 +2789,7 @@ export class ChangeNoteLength extends ChangePins {
 }
 
 export class ChangeNoteTruncate extends ChangeSequence {
-	constructor(doc: SongDocument, pattern: Pattern, start: number, end: number, skipNote?: Note) {
+	constructor(doc: SongDocument, pattern: Pattern, start: number, end: number, skipNote?: Note, matchPitches?: number[]) {
 		super();
 		let i: number = 0;
 		while (i < pattern.notes.length) {
@@ -2772,22 +2799,40 @@ export class ChangeNoteTruncate extends ChangeSequence {
 			} else if (note.end <= start) {
 				i++;
 			} else if (note.start >= end) {
-				break;
-			} else if (note.start < start && note.end > end) {
-				const copy: Note = note.clone();
-				this.append(new ChangeNoteLength(doc, note, note.start, start));
-				i++;
-				this.append(new ChangeNoteAdded(doc, pattern, copy, i, false));
-				this.append(new ChangeNoteLength(doc, copy, end, copy.end));
-				i++;
-			} else if (note.start < start) {
-				this.append(new ChangeNoteLength(doc, note, note.start, start));
-				i++;
-			} else if (note.end > end) {
-				this.append(new ChangeNoteLength(doc, note, end, note.end));
+				let anyOverlap: boolean = false;
+				for (let k: number = i; k < pattern.notes.length; k++) {
+					if (pattern.notes[k].start < end && pattern.notes[k].end > start) {
+						anyOverlap = true;
+						break;
+					}
+				}
+				if (!anyOverlap) break;
 				i++;
 			} else {
-				this.append(new ChangeNoteAdded(doc, pattern, note, i, true));
+				if (matchPitches != undefined && matchPitches.length > 0) {
+					const sharesPitch: boolean = note.pitches.some(p => matchPitches.indexOf(p) != -1);
+					if (!sharesPitch) {
+						i++;
+						continue;
+					}
+				}
+
+				if (note.start < start && note.end > end) {
+					const copy: Note = note.clone();
+					this.append(new ChangeNoteLength(doc, note, note.start, start));
+					i++;
+					this.append(new ChangeNoteAdded(doc, pattern, copy, i, false));
+					this.append(new ChangeNoteLength(doc, copy, end, copy.end));
+					i++;
+				} else if (note.start < start) {
+					this.append(new ChangeNoteLength(doc, note, note.start, start));
+					i++;
+				} else if (note.end > end) {
+					this.append(new ChangeNoteLength(doc, note, end, note.end));
+					i++;
+				} else {
+					this.append(new ChangeNoteAdded(doc, pattern, note, i, true));
+				}
 			}
 		}
 	}

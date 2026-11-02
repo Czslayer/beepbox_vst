@@ -404,17 +404,43 @@ export class ExportPrompt implements Prompt {
 			
 			let prevTime: number = 0;
 			let barStartTime: number = 0;
+			let currentWriter: ArrayBufferWriter = writer;
+			interface MidiTrackEvent {
+				time: number;
+				order: number;
+				eventWriter: ArrayBufferWriter;
+			}
+			const trackEvents: MidiTrackEvent[] = [];
+			let activeEventTime: number = 0;
+			let eventOrderCounter: number = 0;
+
+			function flushActiveEvent(): void {
+				if (currentWriter !== writer && currentWriter.getWriteIndex() > 0) {
+					trackEvents.push({
+						time: activeEventTime,
+						order: eventOrderCounter++,
+						eventWriter: currentWriter,
+					});
+				}
+			}
+
 			const writeEventTime = function(time: number): void {
-				if (time < prevTime) throw new Error("Midi event time cannot go backwards.");
-				writer.writeMidiVariableLength(time - prevTime);
-				prevTime = time;
+				if (isMeta) {
+					if (time < prevTime) throw new Error("Midi event time cannot go backwards.");
+					writer.writeMidiVariableLength(time - prevTime);
+					prevTime = time;
+				} else {
+					flushActiveEvent();
+					activeEventTime = time;
+					currentWriter = new ArrayBufferWriter(16);
+				}
 			}
 			
 			const writeControlEvent = function(message: MidiControlEventMessage, value: number): void {
 				if (!(value >= 0 && value <= 0x7F)) throw new Error("Midi control event value out of range: " + value);
-				writer.writeUint8(MidiEventType.controlChange | midiChannel);
-				writer.writeMidi7Bits(message);
-				writer.writeMidi7Bits(value | 0);
+				currentWriter.writeUint8(MidiEventType.controlChange | midiChannel);
+				currentWriter.writeMidi7Bits(message);
+				currentWriter.writeMidi7Bits(value | 0);
 			}
 			
 			if (isMeta) {
@@ -476,9 +502,9 @@ export class ExportPrompt implements Prompt {
 				
 				let channelName: string = ColorConfig.getChannelColor(song, channel).name + " channel";
 				writeEventTime(0);
-				writer.writeUint8(MidiEventType.meta);
-				writer.writeMidi7Bits(MidiMetaEventMessage.trackName);
-				writer.writeMidiAscii(channelName);
+				currentWriter.writeUint8(MidiEventType.meta);
+				currentWriter.writeMidi7Bits(MidiMetaEventMessage.trackName);
+				currentWriter.writeMidiAscii(channelName);
 				
 				// This sets up pitch bend range. First we choose the pitch bend RPN (which has MSB and LSB components), then we set the value for that RPN (which also has MSB and LSB components) and finally reset the current RPN to null, which is considered best practice.
 				writeEventTime(0); writeControlEvent(MidiControlEventMessage.registeredParameterNumberMSB, MidiRegisteredParameterNumberMSB.pitchBendRange);
@@ -496,9 +522,9 @@ export class ExportPrompt implements Prompt {
 					if (prevInstrumentIndex != instrumentIndex) {
 						prevInstrumentIndex = instrumentIndex;
 						writeEventTime(barStartTime);
-						writer.writeUint8(MidiEventType.meta);
-						writer.writeMidi7Bits(MidiMetaEventMessage.instrumentName);
-						writer.writeMidiAscii("Instrument " + (instrumentIndex + 1));
+						currentWriter.writeUint8(MidiEventType.meta);
+						currentWriter.writeMidi7Bits(MidiMetaEventMessage.instrumentName);
+						currentWriter.writeMidiAscii("Instrument " + (instrumentIndex + 1));
 						
 						if (!isDrumset) {
 							let instrumentProgram: number = 81; // default to sawtooth wave. 
@@ -532,8 +558,8 @@ export class ExportPrompt implements Prompt {
 							
 							// Program (instrument) change event:
 							writeEventTime(barStartTime);
-							writer.writeUint8(MidiEventType.programChange | midiChannel);
-							writer.writeMidi7Bits(instrumentProgram);
+							currentWriter.writeUint8(MidiEventType.programChange | midiChannel);
+							currentWriter.writeMidi7Bits(instrumentProgram);
 						}
 						
 						// Instrument volume:
@@ -608,20 +634,6 @@ export class ExportPrompt implements Prompt {
 									maxPitchOffset = Math.min(maxPitchOffset, interval + pitchBendRange);
 									minPitchOffset = Math.max(minPitchOffset, interval - pitchBendRange);
 								}
-								/*
-								// I'd like to be able to use pitch bend to implement arpeggio, but the "custom inverval" setting in chip instruments combines arpeggio in one tone with another flat tone, and midi can't selectively apply arpeggio to one out of two simultaneous tones. Also it would be hard to reimport. :/
-								if (usesArpeggio && note.pitches.length > polyphony) {
-									let lowestArpeggioOffset: number = 0;
-									let highestArpeggioOffset: number = 0;
-									const basePitch: number = note.pitches[toneCount - 1];
-									for (let pitchIndex: number = toneCount; pitchIndex < note.pitches.length; pitchIndex++) {
-										lowestArpeggioOffset = Math.min(note.pitches[pitchIndex] - basePitch);
-										highestArpeggioOffset = Math.max(note.pitches[pitchIndex] - basePitch);
-									}
-									maxPitchOffset -= lowestArpeggioOffset;
-									minPitchOffset += lowestArpeggioOffset;
-								}
-								*/
 								pitchOffset = Math.min(maxPitchOffset, Math.max(minPitchOffset, pitchOffset));
 							}
 							
@@ -644,9 +656,9 @@ export class ExportPrompt implements Prompt {
 									
 									if (pitchBend != prevPitchBend) {
 										writeEventTime(midiTickTime);
-										writer.writeUint8(MidiEventType.pitchBend | midiChannel);
-										writer.writeMidi7Bits(pitchBend & 0x7f); // least significant bits
-										writer.writeMidi7Bits((pitchBend >> 7) & 0x7f); // most significant bits
+										currentWriter.writeUint8(MidiEventType.pitchBend | midiChannel);
+										currentWriter.writeMidi7Bits(pitchBend & 0x7f); // least significant bits
+										currentWriter.writeMidi7Bits((pitchBend >> 7) & 0x7f); // most significant bits
 										prevPitchBend = pitchBend;
 									}
 									
@@ -698,18 +710,18 @@ export class ExportPrompt implements Prompt {
 										
 										if (!noteStarting && prevPitches[toneIndex] != nextPitches[toneIndex]) {
 											writeEventTime(midiTickTime);
-											writer.writeUint8(MidiEventType.noteOff | midiChannel);
-											writer.writeMidi7Bits(prevPitches[toneIndex]); // old pitch
-											writer.writeMidi7Bits(velocity); // velocity
+											currentWriter.writeUint8(MidiEventType.noteOff | midiChannel);
+											currentWriter.writeMidi7Bits(prevPitches[toneIndex]); // old pitch
+											currentWriter.writeMidi7Bits(velocity); // velocity
 										}
 									}
 									
 									for (let toneIndex: number = 0; toneIndex < toneCount; toneIndex++) {
 										if (noteStarting || prevPitches[toneIndex] != nextPitches[toneIndex]) {
 											writeEventTime(midiTickTime);
-											writer.writeUint8(MidiEventType.noteOn | midiChannel);
-											writer.writeMidi7Bits(nextPitches[toneIndex]); // new pitch
-											writer.writeMidi7Bits(velocity); // velocity
+											currentWriter.writeUint8(MidiEventType.noteOn | midiChannel);
+											currentWriter.writeMidi7Bits(nextPitches[toneIndex]); // new pitch
+											currentWriter.writeMidi7Bits(velocity); // velocity
 											prevPitches[toneIndex] = nextPitches[toneIndex];
 										}
 									}
@@ -724,13 +736,10 @@ export class ExportPrompt implements Prompt {
 							
 							// End all tones.
 							for (let toneIndex: number = 0; toneIndex < toneCount; toneIndex++) {
-								// TODO: If the note at the start of the next pattern has
-								// continuesLastPattern and has the same chord, it ought to extend
-								// this previous note.
 								writeEventTime(noteEndTime);
-								writer.writeUint8(MidiEventType.noteOff | midiChannel);
-								writer.writeMidi7Bits(prevPitches[toneIndex]); // pitch
-								writer.writeMidi7Bits(velocity); // velocity
+								currentWriter.writeUint8(MidiEventType.noteOff | midiChannel);
+								currentWriter.writeMidi7Bits(prevPitches[toneIndex]); // pitch
+								currentWriter.writeMidi7Bits(velocity); // velocity
 							}
 							
 							shouldResetExpressionAndPitchBend = true;
@@ -750,18 +759,46 @@ export class ExportPrompt implements Prompt {
 								// Reset pitch bend
 								prevPitchBend = defaultMidiPitchBend;
 								writeEventTime(barStartTime);
-								writer.writeUint8(MidiEventType.pitchBend | midiChannel);
-								writer.writeMidi7Bits(prevPitchBend & 0x7f); // least significant bits
-								writer.writeMidi7Bits((prevPitchBend >> 7) & 0x7f); // most significant bits
+								currentWriter.writeUint8(MidiEventType.pitchBend | midiChannel);
+								currentWriter.writeMidi7Bits(prevPitchBend & 0x7f); // least significant bits
+								currentWriter.writeMidi7Bits((prevPitchBend >> 7) & 0x7f); // most significant bits
 							}
 						}
 					}
 					
 					barStartTime += midiTicksPerBar;
 				}
+				
+				flushActiveEvent();
+				trackEvents.sort((a, b) => {
+					if (a.time !== b.time) return a.time - b.time;
+					const bufA = new Uint8Array(a.eventWriter.toCompactArrayBuffer());
+					const bufB = new Uint8Array(b.eventWriter.toCompactArrayBuffer());
+					const typeA = bufA[0] & 0xf0;
+					const typeB = bufB[0] & 0xf0;
+					if (typeA === MidiEventType.noteOff && typeB === MidiEventType.noteOn) return -1;
+					if (typeA === MidiEventType.noteOn && typeB === MidiEventType.noteOff) return 1;
+					return a.order - b.order;
+				});
+				let trackPrevTime: number = 0;
+				for (const ev of trackEvents) {
+					const compact = new Uint8Array(ev.eventWriter.toCompactArrayBuffer());
+					if (ev.time < trackPrevTime) throw new Error("Midi event time cannot go backwards.");
+					writer.writeMidiVariableLength(ev.time - trackPrevTime);
+					trackPrevTime = ev.time;
+					for (let b = 0; b < compact.length; b++) {
+						writer.writeUint8(compact[b]);
+					}
+				}
+				prevTime = trackPrevTime;
+				currentWriter = writer;
 			}
 			
-			writeEventTime(barStartTime);
+			if (!isMeta) {
+				writer.writeMidiVariableLength(Math.max(0, barStartTime - prevTime));
+			} else {
+				writeEventTime(barStartTime);
+			}
 			writer.writeUint8(MidiEventType.meta);
 			writer.writeMidi7Bits(MidiMetaEventMessage.endOfTrack);
 			writer.writeMidiVariableLength(0x00);

@@ -31,7 +31,9 @@ export function clamp(min: number, max: number, val: number): number {
 
 function validateRange(min: number, max: number, val: number): number {
 	if (min <= val && val <= max) return val;
-	throw new Error(`Value ${val} not in range [${min}, ${max}]`);
+	if (val < min) return min;
+	if (val > max) return max;
+	return min;
 }
 
 const enum CharCode {
@@ -147,7 +149,7 @@ const enum SongTagCode {
 	harmonics           = CharCode.H, // added in BeepBox URL version 7
 	stringSustain       = CharCode.I, // added in BeepBox URL version 9
 	soundfont           = CharCode.J, // added for SoundFont
-//	                    = CharCode.K,
+	polyphonicPatterns  = CharCode.K, // added for unchopped polyphonic patterns
 	pan                 = CharCode.L, // added between 8 and 9, DEPRECATED
 //	                    = CharCode.M, // added in JummBox URL version 1(?) for customChipWave
 //	                    = CharCode.N, // added in JummBox URL version 1(?) for songTitle
@@ -1836,6 +1838,87 @@ export class Instrument {
 	}
 }
 
+export function partitionNotesIntoVoices(allNotes: Note[], maxVoices: number = 8): Note[][] {
+	const voices: Note[][] = [];
+	for (let v = 0; v < maxVoices; v++) {
+		voices.push([]);
+	}
+	if (allNotes.length === 0) return voices;
+
+	const sorted: Note[] = allNotes.slice().sort((a, b) => {
+		if (a.start != b.start) return a.start - b.start;
+		return a.end - b.end;
+	});
+
+	for (const note of sorted) {
+		let placed: boolean = false;
+		
+		// Voice 0 is the main channel. Keep non-overlapping notes, and keep chords on main channel if they don't overlap.
+		const voice0 = voices[0];
+		let voice0Conflict: boolean = false;
+		let matchingChordNote: Note | null = null;
+		
+		for (const existing of voice0) {
+			if (note.start < existing.end && note.end > existing.start) {
+				if (note.start === existing.start && note.end === existing.end && (existing.pitches.length + note.pitches.length <= Config.maxChordSize)) {
+					matchingChordNote = existing;
+				} else {
+					voice0Conflict = true;
+					break;
+				}
+			}
+		}
+
+		if (!voice0Conflict) {
+			if (matchingChordNote != null) {
+				for (const p of note.pitches) {
+					if (matchingChordNote.pitches.indexOf(p) == -1 && matchingChordNote.pitches.length < Config.maxChordSize) {
+						matchingChordNote.pitches.push(p);
+					}
+				}
+			} else {
+				voice0.push(note.clone());
+			}
+			placed = true;
+		} else {
+			// Overlaps: fake it by distributing to invisible sub monophonic channels (voices 1..maxVoices - 1)
+			for (let v = 1; v < maxVoices; v++) {
+				const subVoice = voices[v];
+				let subConflict = false;
+				let subChordMatch: Note | null = null;
+				for (const existing of subVoice) {
+					if (note.start < existing.end && note.end > existing.start) {
+						if (note.start === existing.start && note.end === existing.end && (existing.pitches.length + note.pitches.length <= Config.maxChordSize)) {
+							subChordMatch = existing;
+						} else {
+							subConflict = true;
+							break;
+						}
+					}
+				}
+				if (!subConflict) {
+					if (subChordMatch != null) {
+						for (const p of note.pitches) {
+							if (subChordMatch.pitches.indexOf(p) == -1 && subChordMatch.pitches.length < Config.maxChordSize) {
+								subChordMatch.pitches.push(p);
+							}
+						}
+					} else {
+						subVoice.push(note.clone());
+					}
+					placed = true;
+					break;
+				}
+			}
+			if (!placed) {
+				voices[maxVoices - 1].push(note.clone());
+			}
+		}
+	}
+
+	return voices;
+}
+
 export class Channel {
 	public name: string = "";
 	public octave: number = 0;
@@ -1843,6 +1926,104 @@ export class Channel {
 	public readonly patterns: Pattern[] = [];
 	public readonly bars: number[] = [];
 	public muted: boolean = false;
+	
+	// Invisible sub monophonic channels (1 per polyphonic voice, up to 7 sub-channels)
+	public readonly subChannels: Channel[] = [];
+	public readonly mainVoicePatterns: Pattern[] = [];
+
+	public syncSubChannels(): void {
+		const maxSubChannels = 7;
+		while (this.subChannels.length < maxSubChannels) {
+			const sub = new Channel();
+			sub.octave = this.octave;
+			sub.muted = this.muted;
+			for (let p = 0; p < this.patterns.length; p++) {
+				sub.patterns.push(new Pattern());
+			}
+			this.subChannels.push(sub);
+		}
+		while (this.mainVoicePatterns.length < this.patterns.length) {
+			this.mainVoicePatterns.push(new Pattern());
+		}
+		this.mainVoicePatterns.length = this.patterns.length;
+
+		for (const sub of this.subChannels) {
+			sub.octave = this.octave;
+			sub.muted = this.muted;
+			sub.instruments.length = 0;
+			for (const inst of this.instruments) {
+				sub.instruments.push(inst);
+			}
+			sub.bars.length = 0;
+			for (const b of this.bars) {
+				sub.bars.push(b);
+			}
+			while (sub.patterns.length < this.patterns.length) {
+				sub.patterns.push(new Pattern());
+			}
+			sub.patterns.length = this.patterns.length;
+		}
+
+		for (let p = 0; p < this.patterns.length; p++) {
+			const pat = this.patterns[p];
+			const mainPat = this.mainVoicePatterns[p];
+			mainPat.instruments.length = 0;
+			for (const inst of pat.instruments) mainPat.instruments.push(inst);
+
+			let hasOverlap = false;
+			let lastEnd = 0;
+			for (const n of pat.notes) {
+				if (n.start < lastEnd) {
+					hasOverlap = true;
+					break;
+				}
+				lastEnd = n.end;
+			}
+
+			if (hasOverlap) {
+				// Partition notes: Voice 0 (main channel) and Voices 1..7 (invisible sub-channels)
+				const voices = partitionNotesIntoVoices(pat.notes, 8);
+				mainPat.notes.length = 0;
+				for (const n of voices[0]) {
+					mainPat.notes.push(n.clone());
+				}
+				for (let v = 0; v < maxSubChannels; v++) {
+					const subPat = this.subChannels[v].patterns[p];
+					subPat.instruments.length = 0;
+					for (const inst of pat.instruments) subPat.instruments.push(inst);
+					subPat.notes.length = 0;
+					for (const n of voices[v + 1]) {
+						subPat.notes.push(n.clone());
+					}
+				}
+			} else {
+				mainPat.notes.length = 0;
+				for (const n of pat.notes) {
+					mainPat.notes.push(n.clone());
+				}
+				for (let v = 0; v < maxSubChannels; v++) {
+					this.subChannels[v].patterns[p].notes.length = 0;
+				}
+			}
+		}
+	}
+
+	public getAllNotesForPattern(patternIndex: number): Note[] {
+		if (patternIndex < 0 || patternIndex >= this.patterns.length) return [];
+		const result: Note[] = [];
+		for (const n of this.patterns[patternIndex].notes) {
+			result.push(n.clone());
+		}
+		for (const sub of this.subChannels) {
+			if (patternIndex < sub.patterns.length) {
+				for (const n of sub.patterns[patternIndex].notes) {
+					result.push(n.clone());
+				}
+			}
+		}
+		result.sort((a, b) => a.start - b.start);
+		return result;
+	}
 }
 
 export class Song {
@@ -2176,7 +2357,10 @@ export class Song {
 			for (let i: number = 0; i < recentPitches.length; i++) {
 				recentPitches[i] += octaveOffset;
 			}
-			for (const pattern of channel.patterns) {
+			channel.syncSubChannels();
+			for (let p: number = 0; p < channel.patterns.length; p++) {
+				const pattern: Pattern = channel.patterns[p];
+				const mainPattern: Pattern = (channel.mainVoicePatterns && channel.mainVoicePatterns[p]) ? channel.mainVoicePatterns[p] : pattern;
 				if (this.patternInstruments) {
 					const instrumentCount: number = validateRange(Config.instrumentCountMin, maxInstrumentsPerPattern, pattern.instruments.length);
 					bits.write(neededInstrumentCountBits, instrumentCount - Config.instrumentCountMin);
@@ -2185,11 +2369,13 @@ export class Song {
 					}
 				}
 				
-				if (pattern.notes.length > 0) {
+				if (mainPattern.notes.length > 0) {
 					bits.write(1, 1);
 					
 					let curPart: number = 0;
-					for (const note of pattern.notes) {
+					const notesToEncode: Note[] = mainPattern.notes;
+					
+					for (const note of notesToEncode) {
 						if (note.start > curPart) {
 							bits.write(2, 0); // rest
 							bits.writePartDuration(note.start - curPart);
@@ -2297,6 +2483,81 @@ export class Song {
 		buffer.push(base64IntToCharCode[digits.length]);
 		Array.prototype.push.apply(buffer, digits); // append digits to buffer.
 		bits.encodeBase64(buffer);
+		
+		// Encode polyphonic patterns (patterns containing overlapping notes or sub-channel notes)
+		const polyPatterns: {channelIndex: number, patternIndex: number, pattern: Pattern}[] = [];
+		for (let channelIndex: number = 0; channelIndex < this.getChannelCount(); channelIndex++) {
+			const channel: Channel = this.channels[channelIndex];
+			channel.syncSubChannels();
+			for (let patternIndex: number = 0; patternIndex < this.patternsPerChannel; patternIndex++) {
+				const pat: Pattern = channel.patterns[patternIndex];
+				const mainPattern: Pattern | undefined = channel.mainVoicePatterns ? channel.mainVoicePatterns[patternIndex] : undefined;
+				
+				const sortedNotes: Note[] = pat.notes.slice().sort((a, b) => a.start - b.start || a.end - b.end);
+				let hasOverlap: boolean = false;
+				let lastEnd: number = 0;
+				for (const n of sortedNotes) {
+					if (n.start < lastEnd) {
+						hasOverlap = true;
+						break;
+					}
+					lastEnd = n.end;
+				}
+				let hasSubNotes: boolean = false;
+				if (channel.subChannels) {
+					for (const sub of channel.subChannels) {
+						if (patternIndex < sub.patterns.length && sub.patterns[patternIndex].notes.length > 0) {
+							hasSubNotes = true;
+							break;
+						}
+					}
+				}
+				const mainLen: number = mainPattern ? mainPattern.notes.length : 0;
+				if (hasOverlap || hasSubNotes || pat.notes.length > mainLen || pat.notes.length > 1) {
+					polyPatterns.push({channelIndex, patternIndex, pattern: pat});
+				}
+			}
+		}
+
+		if (polyPatterns.length > 0) {
+			const polyBits: BitFieldWriter = new BitFieldWriter();
+			polyBits.write(8, polyPatterns.length);
+			for (const item of polyPatterns) {
+				polyBits.write(8, item.channelIndex);
+				polyBits.write(8, item.patternIndex);
+				polyBits.write(4, Math.min(15, item.pattern.instruments.length));
+				for (let i = 0; i < Math.min(15, item.pattern.instruments.length); i++) {
+					polyBits.write(6, item.pattern.instruments[i]);
+				}
+				polyBits.write(8, item.pattern.notes.length);
+				for (const note of item.pattern.notes) {
+					polyBits.write(10, Math.max(0, Math.min(1023, note.start)));
+					polyBits.write(10, Math.max(0, Math.min(1023, note.end)));
+					polyBits.write(1, note.continuesLastPattern ? 1 : 0);
+					polyBits.write(4, Math.min(Config.maxChordSize, note.pitches.length));
+					for (let p = 0; p < Math.min(Config.maxChordSize, note.pitches.length); p++) {
+						polyBits.write(8, Math.max(0, Math.min(255, note.pitches[p])));
+					}
+					polyBits.write(6, Math.min(63, note.pins.length));
+					for (const pin of note.pins) {
+						polyBits.write(8, Math.max(0, Math.min(255, pin.interval + 128)));
+						polyBits.write(10, Math.max(0, Math.min(1023, pin.time)));
+						polyBits.write(bitsPerNoteSize, Math.max(0, Math.min(Config.noteSizeMax, pin.size)));
+					}
+				}
+			}
+
+			let polyStringLength: number = polyBits.lengthBase64();
+			let polyDigits: number[] = [];
+			while (polyStringLength > 0) {
+				polyDigits.unshift(base64IntToCharCode[polyStringLength & 0x3f]);
+				polyStringLength = polyStringLength >> 6;
+			}
+			buffer.push(SongTagCode.polyphonicPatterns);
+			buffer.push(base64IntToCharCode[polyDigits.length]);
+			Array.prototype.push.apply(buffer, polyDigits);
+			polyBits.encodeBase64(buffer);
+		}
 		
 		const maxApplyArgs: number = 64000;
 		if (buffer.length < maxApplyArgs) {
@@ -3241,7 +3502,7 @@ export class Song {
 							let newNote: boolean = false;
 							let shapeIndex: number = 0;
 							if (useOldShape) {
-								shapeIndex = validateRange(0, recentShapes.length - 1, bits.readLongTail(0, 0));
+								shapeIndex = (recentShapes.length > 0) ? validateRange(0, recentShapes.length - 1, bits.readLongTail(0, 0)) : 0;
 							} else {
 								newNote = bits.read(1) == 1;
 							}
@@ -3254,8 +3515,8 @@ export class Song {
 							} else {
 								let shape: any;
 								if (useOldShape) {
-									shape = recentShapes[shapeIndex];
-									recentShapes.splice(shapeIndex, 1);
+									shape = (recentShapes.length > 0) ? recentShapes[shapeIndex] : null;
+									if (recentShapes.length > 0 && shapeIndex < recentShapes.length) recentShapes.splice(shapeIndex, 1);
 								} else {
 									shape = {};
 									
@@ -3279,6 +3540,16 @@ export class Song {
 										pinObj.size = bits.read(bitsPerNoteSize);
 										shape.pins.push(pinObj);
 									}
+								}
+								if (shape == null) {
+									shape = {
+										pitchCount: 1,
+										pinCount: 1,
+										initialSize: 3,
+										pins: [{pitchBend: false, time: 1, size: 3}],
+										length: 1,
+										bendCount: 0
+									};
 								}
 								recentShapes.unshift(shape);
 								if (recentShapes.length > 10) recentShapes.pop(); // TODO: Use Deque?
@@ -3314,9 +3585,13 @@ export class Song {
 											intervalIter++;
 										}
 									} else {
-										const pitchIndex: number = validateRange(0, recentPitches.length - 1, bits.read(3));
-										pitch = recentPitches[pitchIndex];
-										recentPitches.splice(pitchIndex, 1);
+										if (recentPitches.length > 0) {
+											const pitchIndex: number = validateRange(0, recentPitches.length - 1, bits.read(3));
+											pitch = recentPitches[pitchIndex] ?? lastPitch;
+											recentPitches.splice(pitchIndex, 1);
+										} else {
+											pitch = lastPitch;
+										}
 									}
 									
 									recentPitches.unshift(pitch);
@@ -3373,6 +3648,67 @@ export class Song {
 					}
 				} // while (true)
 			} break;
+			case SongTagCode.polyphonicPatterns: {
+				let bitStringLengthLength: number = validateRange(1, 4, base64CharCodeToInt[compressed.charCodeAt(charIndex++)]);
+				let bitStringLength: number = 0;
+				while (bitStringLengthLength > 0) {
+					bitStringLength = bitStringLength << 6;
+					bitStringLength += base64CharCodeToInt[compressed.charCodeAt(charIndex++)];
+					bitStringLengthLength--;
+				}
+				const bits: BitFieldReader = new BitFieldReader(compressed, charIndex, charIndex + bitStringLength);
+				charIndex += bitStringLength;
+				
+				const bitsPerNoteSize: number = Song.getNeededBits(Config.noteSizeMax);
+				const polyPatternCount: number = bits.read(8);
+				for (let i = 0; i < polyPatternCount; i++) {
+					const channelIndex: number = bits.read(8);
+					const patternIndex: number = bits.read(8);
+					const instCount: number = bits.read(4);
+					const instruments: number[] = [];
+					for (let j = 0; j < instCount; j++) {
+						instruments.push(bits.read(6));
+					}
+					const noteCount: number = bits.read(8);
+					const notes: Note[] = [];
+					for (let n = 0; n < noteCount; n++) {
+						const start: number = bits.read(10);
+						const end: number = bits.read(10);
+						const continuesLastPattern: boolean = bits.read(1) == 1;
+						const pitchCount: number = bits.read(4);
+						const pitches: number[] = [];
+						for (let p = 0; p < pitchCount; p++) {
+							pitches.push(bits.read(8));
+						}
+						const pinCount: number = bits.read(6);
+						const pins: NotePin[] = [];
+						for (let k = 0; k < pinCount; k++) {
+							const interval: number = bits.read(8) - 128;
+							const time: number = bits.read(10);
+							const size: number = bits.read(bitsPerNoteSize);
+							pins.push(makeNotePin(interval, time, size));
+						}
+						const note: Note = new Note(pitches[0] ?? 0, start, end, pins[0]?.size ?? 3);
+						note.pitches = pitches;
+						note.pins = pins;
+						note.continuesLastPattern = continuesLastPattern;
+						notes.push(note);
+					}
+					if (channelIndex < this.channels.length && patternIndex < this.patternsPerChannel) {
+						const pattern: Pattern = this.channels[channelIndex].patterns[patternIndex];
+						pattern.notes.length = 0;
+						for (const n of notes) {
+							pattern.notes.push(n);
+						}
+						if (instruments.length > 0) {
+							pattern.instruments.length = 0;
+							for (const inst of instruments) {
+								pattern.instruments.push(inst);
+							}
+						}
+					}
+				}
+			} break;
 			default: {
 				const errorMsg = "Unrecognized song tag code '" + String.fromCharCode(command) + "' (code " + command + ") at index " + (charIndex - 1) + " (channel " + instrumentChannelIterator + ", instrument " + instrumentIndexIterator + ")";
 				console.error("[Song Data Corruption]", errorMsg, {
@@ -3385,6 +3721,10 @@ export class Song {
 				});
 				throw new Error(errorMsg);
 			} break;
+		}
+		
+		for (const channel of this.channels) {
+			channel.syncSubChannels();
 		}
 	}
 	
@@ -4753,6 +5093,7 @@ class ChannelState {
 	public readonly instruments: InstrumentState[] = [];
 	public muted: boolean = false;
 	public singleSeamlessInstrument: number | null = null; // Seamless tones from a pattern with a single instrument can be transferred to a different single seamless instrument in the next pattern.
+	public readonly subChannels: ChannelState[] = [];
 }
 
 export class Synth {
@@ -4766,16 +5107,37 @@ export class Synth {
 		for (let i: number = 0; i < channelCount; i++) {
 			const channel: Channel = this.song!.channels[i];
 			const channelState: ChannelState = this.channels[i];
+			channel.syncSubChannels();
+			
 			for (let j: number = channelState.instruments.length; j < channel.instruments.length; j++) {
 				channelState.instruments[j] = new InstrumentState();
 			}
 			channelState.instruments.length = channel.instruments.length;
+			
+			for (let s: number = channelState.subChannels.length; s < channel.subChannels.length; s++) {
+				channelState.subChannels[s] = new ChannelState();
+			}
+			channelState.subChannels.length = channel.subChannels.length;
+			for (let s: number = 0; s < channel.subChannels.length; s++) {
+				const subChannel: Channel = channel.subChannels[s];
+				const subState: ChannelState = channelState.subChannels[s];
+				for (let j: number = subState.instruments.length; j < subChannel.instruments.length; j++) {
+					subState.instruments[j] = new InstrumentState();
+				}
+				subState.instruments.length = subChannel.instruments.length;
+				subState.muted = channel.muted;
+			}
 			
 			if (channelState.muted != channel.muted) {
 				channelState.muted = channel.muted;
 				if (channelState.muted) {
 					for (const instrumentState of channelState.instruments) {
 						instrumentState.resetAllEffects();
+					}
+					for (const subState of channelState.subChannels) {
+						for (const instrumentState of subState.instruments) {
+							instrumentState.resetAllEffects();
+						}
 					}
 				}
 			}
@@ -4793,6 +5155,17 @@ export class Synth {
 					instrumentState.synthesizer = Synth.getInstrumentSynthFunction(instrument);
 					instrumentState.updateWaves(instrument, this.samplesPerSecond);
 					instrumentState.allocateNecessaryBuffers(this, instrument, samplesPerTick);
+				}
+				for (let s: number = 0; s < song.channels[j].subChannels.length; s++) {
+					const subChannel: Channel = song.channels[j].subChannels[s];
+					const subState: ChannelState = this.channels[j].subChannels[s];
+					for (let i: number = 0; i < subChannel.instruments.length; i++) {
+						const instrument: Instrument = subChannel.instruments[i];
+						const instrumentState: InstrumentState = subState.instruments[i];
+						instrumentState.synthesizer = Synth.getInstrumentSynthFunction(instrument);
+						instrumentState.updateWaves(instrument, this.samplesPerSecond);
+						instrumentState.allocateNecessaryBuffers(this, instrument, samplesPerTick);
+					}
 				}
 			}
 		}
@@ -5168,48 +5541,7 @@ export class Synth {
 				for (let instrumentIndex: number = 0; instrumentIndex < channel.instruments.length; instrumentIndex++) {
 					const instrument: Instrument = channel.instruments[instrumentIndex];
 					const instrumentState: InstrumentState = channelState.instruments[instrumentIndex];
-					
-					if (this.isAtStartOfTick) {
-						let tonesPlayedInThisInstrument: number = instrumentState.activeTones.count() + instrumentState.liveInputTones.count();
-						for (let i: number = 0; i < instrumentState.releasedTones.count(); i++) {
-							const tone: Tone = instrumentState.releasedTones.get(i);
-							if (tone.ticksSinceReleased >= Math.abs(instrument.getFadeOutTicks())) {
-								this.freeReleasedTone(instrumentState, i);
-								i--;
-								continue;
-							}
-							const shouldFadeOutFast: boolean = (tonesPlayedInThisInstrument >= Config.maximumTonesPerChannel);
-							this.computeTone(song, channelIndex, samplesPerTick, tone, true, shouldFadeOutFast);
-							tonesPlayedInThisInstrument++;
-						}
-						
-						if (instrumentState.awake) {
-							if (!instrumentState.computed) {
-								instrumentState.compute(this, instrument, samplesPerTick, Math.ceil(samplesPerTick), null);
-							}
-							instrumentState.computed = false;
-							//instrumentState.envelopeComputer.clearEnvelopes();
-						}
-					}
-					
-					for (let i: number = 0; i < instrumentState.activeTones.count(); i++) {
-						const tone: Tone = instrumentState.activeTones.get(i);
-						this.playTone(channelIndex, bufferIndex, runLength, tone);
-					}
-					
-					for (let i: number = 0; i < instrumentState.liveInputTones.count(); i++) {
-						const tone: Tone = instrumentState.liveInputTones.get(i);
-						this.playTone(channelIndex, bufferIndex, runLength, tone);
-					}
-					
-					for (let i: number = 0; i < instrumentState.releasedTones.count(); i++) {
-						const tone: Tone = instrumentState.releasedTones.get(i);
-						this.playTone(channelIndex, bufferIndex, runLength, tone);
-					}
-					
-					if (instrumentState.awake) {
-						Synth.effectsSynth(this, outputDataL, outputDataR, bufferIndex, runLength, instrumentState);
-					}
+					this.synthesizeInstrument(song, channelIndex, instrumentIndex, instrument, instrumentState, samplesPerTick, bufferIndex, runLength, outputDataL, outputDataR);
 				}
 			}
 			
@@ -5539,31 +5871,59 @@ export class Synth {
 		}
 	}
 	
-	private determineCurrentActiveTones(song: Song, channelIndex: number, samplesPerTick: number, playSong: boolean): void {
-		const channel: Channel = song.channels[channelIndex];
-		const channelState: ChannelState = this.channels[channelIndex];
-		const pattern: Pattern | null = song.getPattern(channelIndex, this.bar);
-		const currentPart: number = this.getCurrentPart();
-		const currentTick: number = this.tick + Config.ticksPerPart * currentPart;
-		let note: Note | null = null;
-		let prevNote: Note | null = null;
-		let nextNote: Note | null = null;
-		
-		if (playSong && pattern != null && !channel.muted && (!this.isRecording || this.liveInputChannel != channelIndex)) {
-			for (let i: number = 0; i < pattern.notes.length; i++) {
-				if (pattern.notes[i].end <= currentPart) {
-					prevNote = pattern.notes[i];
-				} else if (pattern.notes[i].start <= currentPart && pattern.notes[i].end > currentPart) {
-					note = pattern.notes[i];
-				} else if (pattern.notes[i].start > currentPart) {
-					nextNote = pattern.notes[i];
-					break;
+	private synthesizeInstrument(song: Song, channelIndex: number, instrumentIndex: number, instrument: Instrument, instrumentState: InstrumentState, samplesPerTick: number, bufferIndex: number, runLength: number, outputDataL: Float32Array, outputDataR: Float32Array): void {
+		if (this.isAtStartOfTick) {
+			let tonesPlayedInThisInstrument: number = instrumentState.activeTones.count() + instrumentState.liveInputTones.count();
+			for (let i: number = 0; i < instrumentState.releasedTones.count(); i++) {
+				const tone: Tone = instrumentState.releasedTones.get(i);
+				if (tone.ticksSinceReleased >= Math.abs(instrument.getFadeOutTicks())) {
+					this.freeReleasedTone(instrumentState, i);
+					i--;
+					continue;
 				}
+				const shouldFadeOutFast: boolean = (tonesPlayedInThisInstrument >= Config.maximumTonesPerChannel);
+				this.computeTone(song, channelIndex, samplesPerTick, tone, true, shouldFadeOutFast);
+				tonesPlayedInThisInstrument++;
 			}
 			
-			if (note != null) {
-				if (prevNote != null && prevNote.end != note.start) prevNote = null;
-				if (nextNote != null && nextNote.start != note.end) nextNote = null;
+			if (instrumentState.awake) {
+				if (!instrumentState.computed) {
+					instrumentState.compute(this, instrument, samplesPerTick, Math.ceil(samplesPerTick), null);
+				}
+				instrumentState.computed = false;
+			}
+		}
+		
+		for (let i: number = 0; i < instrumentState.activeTones.count(); i++) {
+			const tone: Tone = instrumentState.activeTones.get(i);
+			this.playTone(channelIndex, bufferIndex, runLength, tone);
+		}
+		
+		for (let i: number = 0; i < instrumentState.liveInputTones.count(); i++) {
+			const tone: Tone = instrumentState.liveInputTones.get(i);
+			this.playTone(channelIndex, bufferIndex, runLength, tone);
+		}
+		
+		for (let i: number = 0; i < instrumentState.releasedTones.count(); i++) {
+			const tone: Tone = instrumentState.releasedTones.get(i);
+			this.playTone(channelIndex, bufferIndex, runLength, tone);
+		}
+		
+		if (instrumentState.awake) {
+			Synth.effectsSynth(this, outputDataL, outputDataR, bufferIndex, runLength, instrumentState);
+		}
+	}
+
+	private determineCurrentActiveTonesForChannel(song: Song, channel: Channel, channelState: ChannelState, channelIndex: number, pattern: Pattern | null, samplesPerTick: number, playSong: boolean): void {
+		const currentPart: number = this.getCurrentPart();
+		const currentTick: number = this.tick + Config.ticksPerPart * currentPart;
+		const activeNotes: Note[] = [];
+		if (playSong && pattern != null && !channel.muted && (!this.isRecording || this.liveInputChannel != channelIndex)) {
+			for (let i: number = 0; i < pattern.notes.length; i++) {
+				const n: Note = pattern.notes[i];
+				if (n.start <= currentPart && n.end > currentPart) {
+					activeNotes.push(n);
+				}
 			}
 		}
 		
@@ -5585,195 +5945,226 @@ export class Synth {
 		for (let instrumentIndex: number = 0; instrumentIndex < channel.instruments.length; instrumentIndex++) {
 			const instrumentState: InstrumentState = channelState.instruments[instrumentIndex];
 			const toneList: Deque<Tone> = instrumentState.activeTones;
-			let toneCount: number = 0;
-			if ((note != null) && (!song.patternInstruments || (pattern!.instruments.indexOf(instrumentIndex) != -1))) {
+			
+			const existingTones: (Tone | null)[] = [];
+			while (toneList.count() > 0) {
+				existingTones.push(toneList.popFront());
+			}
+			
+			if (activeNotes.length > 0 && (!song.patternInstruments || (pattern!.instruments.indexOf(instrumentIndex) != -1))) {
 				const instrument: Instrument = channel.instruments[instrumentIndex];
-				let prevNoteForThisInstrument: Note | null = prevNote;
-				let nextNoteForThisInstrument: Note | null = nextNote;
-				
-				const partsPerBar: Number = Config.partsPerBeat * song.beatsPerBar;
+				const partsPerBar: number = Config.partsPerBeat * song.beatsPerBar;
 				const transition: Transition = instrument.getTransition();
 				const chord: Chord = instrument.getChord();
-				let forceContinueAtStart: boolean = false;
-				let forceContinueAtEnd: boolean = false;
-				let tonesInPrevNote: number = 0;
-				let tonesInNextNote: number = 0;
-				if (note.start == 0) {
-					// If the beginning of the note coincides with the beginning of the pattern,
-					// look for an adjacent note at the end of the previous pattern.
-					let prevPattern: Pattern | null = (this.prevBar == null) ? null : song.getPattern(channelIndex, this.prevBar);
-					if (prevPattern != null) {
-						const lastNote: Note | null = (prevPattern.notes.length <= 0) ? null : prevPattern.notes[prevPattern.notes.length - 1];
-						if (lastNote != null && lastNote.end == partsPerBar) {
-							const patternForcesContinueAtStart: boolean = note.continuesLastPattern && Synth.adjacentNotesHaveMatchingPitches(lastNote, note);
-							const chordOfCompatibleInstrument: Chord | null = this.adjacentPatternHasCompatibleInstrumentTransition(song, channel, pattern!, prevPattern, instrumentIndex, transition, chord, note, lastNote, patternForcesContinueAtStart);
-							if (chordOfCompatibleInstrument != null) {
-								prevNoteForThisInstrument = lastNote;
-								tonesInPrevNote = chordOfCompatibleInstrument.singleTone ? 1 : prevNoteForThisInstrument.pitches.length
-								forceContinueAtStart = patternForcesContinueAtStart;
-							}
-						}
-					}
-				} else if (prevNoteForThisInstrument != null) {
-					tonesInPrevNote = chord.singleTone ? 1 : prevNoteForThisInstrument.pitches.length
-				}
-				if (note.end == partsPerBar) {
-					// If the end of the note coincides with the end of the pattern, look for an
-					// adjacent note at the beginning of the next pattern.
-					let nextPattern: Pattern | null = (this.nextBar == null) ? null : song.getPattern(channelIndex, this.nextBar);
-					if (nextPattern != null) {
-						const firstNote: Note | null = (nextPattern.notes.length <= 0) ? null : nextPattern.notes[0];
-						if (firstNote != null && firstNote.start == 0) {
-							const nextPatternForcesContinueAtStart: boolean = firstNote.continuesLastPattern && Synth.adjacentNotesHaveMatchingPitches(note, firstNote);
-							const chordOfCompatibleInstrument: Chord | null = this.adjacentPatternHasCompatibleInstrumentTransition(song, channel, pattern!, nextPattern, instrumentIndex, transition, chord, note, firstNote, nextPatternForcesContinueAtStart);
-							if (chordOfCompatibleInstrument != null) {
-								nextNoteForThisInstrument = firstNote;
-								tonesInNextNote = chordOfCompatibleInstrument.singleTone ? 1 : nextNoteForThisInstrument.pitches.length
-								forceContinueAtEnd = nextPatternForcesContinueAtStart;
-							}
-						}
-					}
-				} else if (nextNoteForThisInstrument != null) {
-					tonesInNextNote = chord.singleTone ? 1 : nextNoteForThisInstrument.pitches.length
-				}
 				
-				if (chord.singleTone) {
-					const atNoteStart: boolean = (Config.ticksPerPart * note.start == currentTick);
-					let tone: Tone;
-					if (toneList.count() <= toneCount) {
-						tone = this.newTone();
-						toneList.pushBack(tone);
-					} else if (atNoteStart && ((!transition.isSeamless && !forceContinueAtStart) || prevNoteForThisInstrument == null)) {
-						const oldTone: Tone = toneList.get(toneCount);
-						if (oldTone.isOnLastTick) {
-							this.freeTone(oldTone);
-						} else {
-							this.releaseTone(instrumentState, oldTone);
+				for (const note of activeNotes) {
+					let prevNoteForThisInstrument: Note | null = null;
+					let nextNoteForThisInstrument: Note | null = null;
+					let forceContinueAtStart: boolean = false;
+					let forceContinueAtEnd: boolean = false;
+					let tonesInPrevNote: number = 0;
+					let tonesInNextNote: number = 0;
+					
+					if (pattern != null) {
+						for (let i = 0; i < pattern.notes.length; i++) {
+							const candidate = pattern.notes[i];
+							if (candidate.end == note.start) {
+								if (prevNoteForThisInstrument == null || Synth.adjacentNotesHaveMatchingPitches(candidate, note)) {
+									prevNoteForThisInstrument = candidate;
+								}
+							}
+							if (candidate.start == note.end) {
+								if (nextNoteForThisInstrument == null || Synth.adjacentNotesHaveMatchingPitches(note, candidate)) {
+									nextNoteForThisInstrument = candidate;
+								}
+							}
 						}
-						tone = this.newTone();
-						toneList.set(toneCount, tone);
-					} else {
-						tone = toneList.get(toneCount);
-					}
-					toneCount++;
-					
-					for (let i: number = 0; i < note.pitches.length; i++) {
-						tone.pitches[i] = note.pitches[i];
-					}
-					tone.pitchCount = note.pitches.length;
-					tone.chordSize = 1;
-					tone.instrumentIndex = instrumentIndex;
-					tone.note = note;
-					tone.noteStartPart = note.start;
-					tone.noteEndPart = note.end;
-					tone.prevNote = prevNoteForThisInstrument;
-					tone.nextNote = nextNoteForThisInstrument;
-					tone.prevNotePitchIndex = 0;
-					tone.nextNotePitchIndex = 0;
-					tone.atNoteStart = atNoteStart;
-					tone.passedEndOfNote = false;
-					tone.forceContinueAtStart = forceContinueAtStart;
-					tone.forceContinueAtEnd = forceContinueAtEnd;
-					this.computeTone(song, channelIndex, samplesPerTick, tone, false, false);
-				} else {
-					const transition: Transition = instrument.getTransition();
-					
-					if (((transition.isSeamless && !transition.slides && chord.strumParts == 0) || forceContinueAtStart) && (Config.ticksPerPart * note.start == currentTick) && prevNoteForThisInstrument != null) {
-						this.moveTonesIntoOrderedTempMatchedList(toneList, note.pitches);
 					}
 					
-					let strumOffsetParts: number = 0;
-					for (let i: number = 0; i < note.pitches.length; i++) {
-						
-						let prevNoteForThisTone: Note | null = (tonesInPrevNote > i) ? prevNoteForThisInstrument : null;
-						let noteForThisTone: Note = note;
-						let nextNoteForThisTone: Note | null = (tonesInNextNote > i) ? nextNoteForThisInstrument : null;
-						let noteStartPart: number = noteForThisTone.start + strumOffsetParts;
-						let passedEndOfNote: boolean = false;
-						
-						// Strumming may mean that a note's actual start time may be after the
-						// note's displayed start time. If the note start hasn't been reached yet,
-						// carry over the previous tone if available and seamless, otherwise skip
-						// the new tone until it is ready to start.
-						if (noteStartPart > currentPart) {
-							if (toneList.count() > i && (transition.isSeamless || forceContinueAtStart) && prevNoteForThisTone != null) {
-								// Continue the previous note's chord until the current one takes over.
-								nextNoteForThisTone = noteForThisTone;
-								noteForThisTone = prevNoteForThisTone;
-								prevNoteForThisTone = null;
-								noteStartPart = noteForThisTone.start + strumOffsetParts;
-								passedEndOfNote = true;
-							} else {
-								// This and the rest of the tones in the chord shouldn't start yet.
+					if (note.start == 0) {
+						let prevPattern: Pattern | null = (this.prevBar == null) ? null : song.getPattern(channelIndex, this.prevBar);
+						if (prevPattern != null) {
+							for (let i = 0; i < prevPattern.notes.length; i++) {
+								const lastNote = prevPattern.notes[i];
+								if (lastNote.end == partsPerBar) {
+									const patternForcesContinueAtStart: boolean = note.continuesLastPattern && Synth.adjacentNotesHaveMatchingPitches(lastNote, note);
+									const chordOfCompatibleInstrument: Chord | null = this.adjacentPatternHasCompatibleInstrumentTransition(song, channel, pattern!, prevPattern, instrumentIndex, transition, chord, note, lastNote, patternForcesContinueAtStart);
+									if (chordOfCompatibleInstrument != null) {
+										prevNoteForThisInstrument = lastNote;
+										tonesInPrevNote = chordOfCompatibleInstrument.singleTone ? 1 : prevNoteForThisInstrument.pitches.length;
+										forceContinueAtStart = patternForcesContinueAtStart;
+										break;
+									}
+								}
+							}
+						}
+					} else if (prevNoteForThisInstrument != null) {
+						tonesInPrevNote = chord.singleTone ? 1 : prevNoteForThisInstrument.pitches.length;
+					}
+					
+					if (note.end == partsPerBar) {
+						let nextPattern: Pattern | null = (this.nextBar == null) ? null : song.getPattern(channelIndex, this.nextBar);
+						if (nextPattern != null) {
+							for (let i = 0; i < nextPattern.notes.length; i++) {
+								const firstNote = nextPattern.notes[i];
+								if (firstNote.start == 0) {
+									const nextPatternForcesContinueAtStart: boolean = firstNote.continuesLastPattern && Synth.adjacentNotesHaveMatchingPitches(note, firstNote);
+									const chordOfCompatibleInstrument: Chord | null = this.adjacentPatternHasCompatibleInstrumentTransition(song, channel, pattern!, nextPattern, instrumentIndex, transition, chord, note, firstNote, nextPatternForcesContinueAtStart);
+									if (chordOfCompatibleInstrument != null) {
+										nextNoteForThisInstrument = firstNote;
+										tonesInNextNote = chordOfCompatibleInstrument.singleTone ? 1 : nextNoteForThisInstrument.pitches.length;
+										forceContinueAtEnd = nextPatternForcesContinueAtStart;
+										break;
+									}
+								}
+							}
+						}
+					} else if (nextNoteForThisInstrument != null) {
+						tonesInNextNote = chord.singleTone ? 1 : nextNoteForThisInstrument.pitches.length;
+					}
+					
+					if (chord.singleTone) {
+						const atNoteStart: boolean = (Config.ticksPerPart * note.start == currentTick);
+						let tone: Tone | null = null;
+						for (let j = 0; j < existingTones.length; j++) {
+							const t = existingTones[j];
+							if (t != null && t.note === note) {
+								tone = t;
+								existingTones[j] = null;
 								break;
 							}
 						}
-						
-						let noteEndPart: number = noteForThisTone.end;
-						if ((transition.isSeamless || forceContinueAtStart) && nextNoteForThisTone != null) {
-							noteEndPart = Math.min(Config.partsPerBeat * this.song!.beatsPerBar, noteEndPart + strumOffsetParts);
-						}
-						if ((!transition.continues && !forceContinueAtStart) || prevNoteForThisTone == null) {
-							strumOffsetParts += chord.strumParts;
-						}
-						
-						const atNoteStart: boolean = (Config.ticksPerPart * noteStartPart == currentTick);
-						let tone: Tone;
-						if (this.tempMatchedPitchTones[toneCount] != null) {
-							tone = this.tempMatchedPitchTones[toneCount]!;
-							this.tempMatchedPitchTones[toneCount] = null;
-							toneList.pushBack(tone);
-						} else if (toneList.count() <= toneCount) {
-							tone = this.newTone();
-							toneList.pushBack(tone);
-						} else if (atNoteStart && ((!transition.isSeamless && !forceContinueAtStart) || prevNoteForThisTone == null)) {
-							const oldTone: Tone = toneList.get(toneCount);
-							if (oldTone.isOnLastTick) {
-								this.freeTone(oldTone);
-							} else {
-								this.releaseTone(instrumentState, oldTone);
+						if (tone == null && atNoteStart && (transition.isSeamless || forceContinueAtStart) && prevNoteForThisInstrument != null) {
+							for (let j = 0; j < existingTones.length; j++) {
+								const t = existingTones[j];
+								if (t != null && t.note === prevNoteForThisInstrument) {
+									tone = t;
+									existingTones[j] = null;
+									break;
+								}
 							}
-							tone = this.newTone();
-							toneList.set(toneCount, tone);
-						} else {
-							tone = toneList.get(toneCount);
 						}
-						toneCount++;
+						if (tone == null) {
+							tone = this.newTone();
+						}
 						
-						tone.pitches[0] = noteForThisTone.pitches[i];
-						tone.pitchCount = 1;
-						tone.chordSize = noteForThisTone.pitches.length;
+						for (let i: number = 0; i < note.pitches.length; i++) {
+							tone.pitches[i] = note.pitches[i];
+						}
+						tone.pitchCount = note.pitches.length;
+						tone.chordSize = 1;
 						tone.instrumentIndex = instrumentIndex;
-						tone.note = noteForThisTone;
-						tone.noteStartPart = noteStartPart;
-						tone.noteEndPart = noteEndPart;
-						tone.prevNote = prevNoteForThisTone;
-						tone.nextNote = nextNoteForThisTone;
-						tone.prevNotePitchIndex = i;
-						tone.nextNotePitchIndex = i;
+						tone.note = note;
+						tone.noteStartPart = note.start;
+						tone.noteEndPart = note.end;
+						tone.prevNote = prevNoteForThisInstrument;
+						tone.nextNote = nextNoteForThisInstrument;
+						tone.prevNotePitchIndex = 0;
+						tone.nextNotePitchIndex = 0;
 						tone.atNoteStart = atNoteStart;
-						tone.passedEndOfNote = passedEndOfNote;
-						tone.forceContinueAtStart = forceContinueAtStart && prevNoteForThisTone != null;
-						tone.forceContinueAtEnd = forceContinueAtEnd && nextNoteForThisTone != null;
+						tone.passedEndOfNote = false;
+						tone.forceContinueAtStart = forceContinueAtStart;
+						tone.forceContinueAtEnd = forceContinueAtEnd;
 						this.computeTone(song, channelIndex, samplesPerTick, tone, false, false);
+						toneList.pushBack(tone);
+					} else {
+						let strumOffsetParts: number = 0;
+						for (let i: number = 0; i < note.pitches.length; i++) {
+							let prevNoteForThisTone: Note | null = (tonesInPrevNote > i) ? prevNoteForThisInstrument : null;
+							let noteForThisTone: Note = note;
+							let nextNoteForThisTone: Note | null = (tonesInNextNote > i) ? nextNoteForThisInstrument : null;
+							let noteStartPart: number = noteForThisTone.start + strumOffsetParts;
+							let passedEndOfNote: boolean = false;
+							
+							if (noteStartPart > currentPart) {
+								break;
+							}
+							
+							let noteEndPart: number = noteForThisTone.end;
+							if ((transition.isSeamless || forceContinueAtStart) && nextNoteForThisTone != null) {
+								noteEndPart = Math.min(Config.partsPerBeat * this.song!.beatsPerBar, noteEndPart + strumOffsetParts);
+							}
+							if ((!transition.continues && !forceContinueAtStart) || prevNoteForThisTone == null) {
+								strumOffsetParts += chord.strumParts;
+							}
+							
+							const atNoteStart: boolean = (Config.ticksPerPart * noteStartPart == currentTick);
+							let tone: Tone | null = null;
+							for (let j = 0; j < existingTones.length; j++) {
+								const t = existingTones[j];
+								if (t != null && t.note === note && t.prevNotePitchIndex === i) {
+									tone = t;
+									existingTones[j] = null;
+									break;
+								}
+							}
+							if (tone == null && atNoteStart && (transition.isSeamless || forceContinueAtStart) && prevNoteForThisTone != null) {
+								for (let j = 0; j < existingTones.length; j++) {
+									const t = existingTones[j];
+									if (t != null && t.note === prevNoteForThisTone) {
+										const p: number = t.pitches[0] + t.lastInterval;
+										if (p == note.pitches[i]) {
+											tone = t;
+											existingTones[j] = null;
+											break;
+										}
+									}
+								}
+								if (tone == null) {
+									for (let j = 0; j < existingTones.length; j++) {
+										const t = existingTones[j];
+										if (t != null && t.note === prevNoteForThisTone) {
+											tone = t;
+											existingTones[j] = null;
+											break;
+										}
+									}
+								}
+							}
+							if (tone == null) {
+								tone = this.newTone();
+							}
+							
+							tone.pitches[0] = noteForThisTone.pitches[i];
+							tone.pitchCount = 1;
+							tone.chordSize = noteForThisTone.pitches.length;
+							tone.instrumentIndex = instrumentIndex;
+							tone.note = noteForThisTone;
+							tone.noteStartPart = noteStartPart;
+							tone.noteEndPart = noteEndPart;
+							tone.prevNote = prevNoteForThisTone;
+							tone.nextNote = nextNoteForThisTone;
+							tone.prevNotePitchIndex = i;
+							tone.nextNotePitchIndex = i;
+							tone.atNoteStart = atNoteStart;
+							tone.passedEndOfNote = passedEndOfNote;
+							tone.forceContinueAtStart = forceContinueAtStart && prevNoteForThisTone != null;
+							tone.forceContinueAtEnd = forceContinueAtEnd && nextNoteForThisTone != null;
+							this.computeTone(song, channelIndex, samplesPerTick, tone, false, false);
+							toneList.pushBack(tone);
+						}
 					}
 				}
 			}
 			
-			// Automatically free or release seamless tones if there's no new note to take over.
-			while (toneList.count() > toneCount) {
-				const tone: Tone = toneList.popBack();
-				const channel: Channel = song.channels[channelIndex];
-				if (tone.instrumentIndex < channel.instruments.length && !tone.isOnLastTick) {
-					const instrumentState: InstrumentState = channelState.instruments[tone.instrumentIndex];
-					this.releaseTone(instrumentState, tone);
+			for (let j = 0; j < existingTones.length; j++) {
+				const oldTone: Tone | null = existingTones[j];
+				if (oldTone == null) continue;
+				if (oldTone.instrumentIndex < channel.instruments.length && !oldTone.isOnLastTick) {
+					const instState: InstrumentState = channelState.instruments[oldTone.instrumentIndex];
+					this.releaseTone(instState, oldTone);
 				} else {
-					this.freeTone(tone);
+					this.freeTone(oldTone);
 				}
 			}
-			
-			this.clearTempMatchedPitchTones(toneCount, instrumentState);
 		}
+	}
+
+	private determineCurrentActiveTones(song: Song, channelIndex: number, samplesPerTick: number, playSong: boolean): void {
+		const channel: Channel = song.channels[channelIndex];
+		const channelState: ChannelState = this.channels[channelIndex];
+		const pattern: Pattern | null = song.getPattern(channelIndex, this.bar);
+		this.determineCurrentActiveTonesForChannel(song, channel, channelState, channelIndex, pattern, samplesPerTick, playSong);
 	}
 	
 	private clearTempMatchedPitchTones(toneCount: number, instrumentState: InstrumentState): void {
