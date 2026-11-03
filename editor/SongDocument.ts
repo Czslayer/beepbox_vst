@@ -270,6 +270,7 @@ export class SongDocument {
 	
 	// Make sure the doc state is self-consistent.
 	private _validateDocState(): void {
+		if (this.song) this.song.markAllSubChannelsDirty();
 		const channelCount: number = this.song.getChannelCount();
 		for (let i: number = this.recentPatternInstruments.length; i < channelCount; i++) {
 			this.recentPatternInstruments[i] = [0];

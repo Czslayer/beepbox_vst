@@ -4,6 +4,7 @@ import {SongDocument} from "./SongDocument.js";
 import {RecoveredSong, RecoveredVersion, SongRecovery, versionToKey} from "./SongRecovery.js";
 import {Prompt} from "./Prompt.js";
 import {HTML} from "imperative-html/dist/esm/elements-strict.js";
+import {ChangeSong} from "./changes.js";
 
 const {button, div, h2, p, select, option, iframe} = HTML;
 
@@ -23,6 +24,7 @@ export class SongRecoveryPrompt implements Prompt {
 	
 	constructor(private _doc: SongDocument) {
 		this._cancelButton.addEventListener("click", this._close);
+		window.addEventListener("message", this._onMessage);
 		
 		const songs: RecoveredSong[] = SongRecovery.getAllRecoveredSongs();
 		
@@ -39,7 +41,21 @@ export class SongRecoveryPrompt implements Prompt {
 			
 			const player: HTMLIFrameElement = iframe({style: "width: 100%; height: 60px; border: none; display: block;"});
 			player.src = "player/#song=" + window.localStorage.getItem(versionToKey(song.versions[0]));
-			const container: HTMLDivElement = div({style: "margin: 4px 0;"}, div({class: "selectContainer", style: "width: 100%; margin: 2px 0;"}, versionMenu), player);
+			
+			const loadButton: HTMLButtonElement = button({style: "width: 100%; height: 26px; margin: 4px 0 8px 0; cursor: pointer;"}, "Load This Version");
+			loadButton.addEventListener("click", () => {
+				const version: RecoveredVersion = song.versions[versionMenu.selectedIndex];
+				const songData: string | null = window.localStorage.getItem(versionToKey(version));
+				if (songData) {
+					this._loadSong(songData);
+				}
+			});
+
+			const container: HTMLDivElement = div({style: "margin: 6px 0; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.15);"},
+				div({class: "selectContainer", style: "width: 100%; margin: 2px 0;"}, versionMenu),
+				player,
+				loadButton
+			);
 			this._songContainer.appendChild(container);
 			
 			versionMenu.addEventListener("change", () => {
@@ -50,11 +66,24 @@ export class SongRecoveryPrompt implements Prompt {
 		}
 	}
 	
+	private _loadSong = (songData: string): void => {
+		this._doc.prompt = null;
+		this._doc.goBackToStart();
+		this._doc.record(new ChangeSong(this._doc, songData));
+	};
+
+	private _onMessage = (event: MessageEvent): void => {
+		if (event.data && event.data.type === "beepboxLoadSong" && typeof event.data.song === "string") {
+			this._loadSong(event.data.song);
+		}
+	};
+
 	private _close = (): void => { 
 		this._doc.undo();
-	}
+	};
 	
 	public cleanUp = (): void => { 
 		this._cancelButton.removeEventListener("click", this._close);
-	}
+		window.removeEventListener("message", this._onMessage);
+	};
 }

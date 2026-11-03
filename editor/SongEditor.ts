@@ -5,6 +5,7 @@ import {Preset, PresetCategory, EditorConfig, isMobile, isOnMac, ctrlSymbol, pre
 import {ColorConfig, ChannelColors} from "./ColorConfig.js";
 import "./Layout.js"; // Imported here for the sake of ensuring this code is transpiled early.
 import {Instrument, Channel, Synth} from "../synth/synth.js";
+import {DiagnosticsLogger} from "../synth/DiagnosticsLogger.js";
 import {HTML} from "imperative-html/dist/esm/elements-strict.js";
 import {EasyPointers, getElementDimensions} from "./EasyPointers.js";
 import {Preferences} from "./Preferences.js";
@@ -588,6 +589,7 @@ export class SongEditor {
 	private readonly _drumsetEnvelopeSelects: HTMLSelectElement[] = [];
 	
 	constructor(beepboxEditorContainer: HTMLElement) {
+		DiagnosticsLogger.init();
 		this.doc.notifier.watch(this.whenUpdated);
 		
 		window.addEventListener("resize", this._whenResized);
@@ -899,7 +901,8 @@ export class SongEditor {
 	}
 	
 	public whenUpdated = (): void => {
-		const prefs: Preferences = this.doc.prefs;
+		try {
+			const prefs: Preferences = this.doc.prefs;
 		this._muteEditor.container.style.display = prefs.enableChannelMuting ? "" : "none";
 		this.doc.trackVisibleBars = Math.floor((this._trackVisibleArea.clientWidth - (prefs.enableChannelMuting ? 110 : 0)) / this.doc.getBarWidth());
 		this.doc.trackVisibleChannels = Math.floor((this._trackVisibleArea.clientHeight - 30) / ChannelRow.patternHeight);
@@ -1377,67 +1380,77 @@ export class SongEditor {
 			this._settingsArea.scrollTop = this._settingsArea.scrollHeight;
 			this.doc.addedEnvelope = false;
 		}
+		} catch (error) {
+			DiagnosticsLogger.logCrash("SongEditor.whenUpdated", error, {
+				bar: this.doc.bar,
+				channel: this.doc.channel
+			});
+		}
 	}
 	
 	public updatePlayButton = (): void => {
-		if (this._renderedIsPlaying != this.doc.synth.playing || this._renderedIsRecording != this.doc.synth.recording || this._renderedShowRecordButton != this.doc.prefs.showRecordButton || this._renderedCtrlHeld != this._ctrlHeld) {
-			this._renderedIsPlaying = this.doc.synth.playing;
-			this._renderedIsRecording = this.doc.synth.recording;
-			this._renderedShowRecordButton = this.doc.prefs.showRecordButton;
-			this._renderedCtrlHeld = this._ctrlHeld;
-			
-			if (document.activeElement == this._playButton || document.activeElement == this._pauseButton || document.activeElement == this._recordButton || document.activeElement == this._stopButton) {
-				// When a focused element is hidden, focus is transferred to the document, so let's refocus the editor instead to make sure we can still capture keyboard input.
-				this._refocusStage();
+		try {
+			if (this._renderedIsPlaying != this.doc.synth.playing || this._renderedIsRecording != this.doc.synth.recording || this._renderedShowRecordButton != this.doc.prefs.showRecordButton || this._renderedCtrlHeld != this._ctrlHeld) {
+				this._renderedIsPlaying = this.doc.synth.playing;
+				this._renderedIsRecording = this.doc.synth.recording;
+				this._renderedShowRecordButton = this.doc.prefs.showRecordButton;
+				this._renderedCtrlHeld = this._ctrlHeld;
+				
+				if (document.activeElement == this._playButton || document.activeElement == this._pauseButton || document.activeElement == this._recordButton || document.activeElement == this._stopButton) {
+					// When a focused element is hidden, focus is transferred to the document, so let's refocus the editor instead to make sure we can still capture keyboard input.
+					this._refocusStage();
+				}
+				
+				this._playButton.style.display = "none";
+				this._pauseButton.style.display = "none";
+				this._recordButton.style.display = "none";
+				this._stopButton.style.display = "none";
+				this._prevBarButton.style.display = "";
+				this._nextBarButton.style.display = "";
+				this._playButton.classList.remove("shrunk");
+				this._recordButton.classList.remove("shrunk");
+				this._patternEditorRow.style.pointerEvents = "";
+				this._octaveScrollBar.container.style.pointerEvents = "";
+				this._octaveScrollBar.container.style.opacity = "";
+				this._trackContainer.style.pointerEvents = "";
+				this._loopEditor.container.style.opacity = "";
+				this._instrumentSettingsArea.style.pointerEvents = "";
+				this._instrumentSettingsArea.style.opacity = "";
+				this._menuArea.style.pointerEvents = "";
+				this._menuArea.style.opacity = "";
+				this._songSettingsArea.style.pointerEvents = "";
+				this._songSettingsArea.style.opacity = "";
+				
+				if (this.doc.synth.recording) {
+					this._stopButton.style.display = "";
+					this._prevBarButton.style.display = "none";
+					this._nextBarButton.style.display = "none";
+					this._patternEditorRow.style.pointerEvents = "none";
+					this._octaveScrollBar.container.style.pointerEvents = "none";
+					this._octaveScrollBar.container.style.opacity = "0.5";
+					this._trackContainer.style.pointerEvents = "none";
+					this._loopEditor.container.style.opacity = "0.5";
+					this._instrumentSettingsArea.style.pointerEvents = "none";
+					this._instrumentSettingsArea.style.opacity = "0.5";
+					this._menuArea.style.pointerEvents = "none";
+					this._menuArea.style.opacity = "0.5";
+					this._songSettingsArea.style.pointerEvents = "none";
+					this._songSettingsArea.style.opacity = "0.5";
+				} else if (this.doc.synth.playing) {
+					this._pauseButton.style.display = "";
+				} else if (this.doc.prefs.showRecordButton) {
+					this._playButton.style.display = "";
+					this._recordButton.style.display = "";
+					this._playButton.classList.add("shrunk");
+					this._recordButton.classList.add("shrunk");
+				} else if (this._ctrlHeld) {
+					this._recordButton.style.display = "";
+				} else {
+					this._playButton.style.display = "";
+				}
 			}
-			
-			this._playButton.style.display = "none";
-			this._pauseButton.style.display = "none";
-			this._recordButton.style.display = "none";
-			this._stopButton.style.display = "none";
-			this._prevBarButton.style.display = "";
-			this._nextBarButton.style.display = "";
-			this._playButton.classList.remove("shrunk");
-			this._recordButton.classList.remove("shrunk");
-			this._patternEditorRow.style.pointerEvents = "";
-			this._octaveScrollBar.container.style.pointerEvents = "";
-			this._octaveScrollBar.container.style.opacity = "";
-			this._trackContainer.style.pointerEvents = "";
-			this._loopEditor.container.style.opacity = "";
-			this._instrumentSettingsArea.style.pointerEvents = "";
-			this._instrumentSettingsArea.style.opacity = "";
-			this._menuArea.style.pointerEvents = "";
-			this._menuArea.style.opacity = "";
-			this._songSettingsArea.style.pointerEvents = "";
-			this._songSettingsArea.style.opacity = "";
-			
-			if (this.doc.synth.recording) {
-				this._stopButton.style.display = "";
-				this._prevBarButton.style.display = "none";
-				this._nextBarButton.style.display = "none";
-				this._patternEditorRow.style.pointerEvents = "none";
-				this._octaveScrollBar.container.style.pointerEvents = "none";
-				this._octaveScrollBar.container.style.opacity = "0.5";
-				this._trackContainer.style.pointerEvents = "none";
-				this._loopEditor.container.style.opacity = "0.5";
-				this._instrumentSettingsArea.style.pointerEvents = "none";
-				this._instrumentSettingsArea.style.opacity = "0.5";
-				this._menuArea.style.pointerEvents = "none";
-				this._menuArea.style.opacity = "0.5";
-				this._songSettingsArea.style.pointerEvents = "none";
-				this._songSettingsArea.style.opacity = "0.5";
-			} else if (this.doc.synth.playing) {
-				this._pauseButton.style.display = "";
-			} else if (this.doc.prefs.showRecordButton) {
-				this._playButton.style.display = "";
-				this._recordButton.style.display = "";
-				this._playButton.classList.add("shrunk");
-				this._recordButton.classList.add("shrunk");
-			} else if (this._ctrlHeld) {
-				this._recordButton.style.display = "";
-			} else {
-				this._playButton.style.display = "";
-			}
+		} catch (error) {
+			DiagnosticsLogger.logCrash("SongEditor.updatePlayButton", error);
 		}
 		window.requestAnimationFrame(this.updatePlayButton);
 	}

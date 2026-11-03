@@ -13,6 +13,7 @@ export class ChordDetector {
 	private readonly _historyContainer: HTMLDivElement;
 	private _lastText: string = "";
 	private _lastChannel: number = -1;
+	private _lastPart: number = -1;
 	private _channelHistories: Map<number, string[]> = new Map();
 	private _animationFrameId: number | null = null;
 
@@ -67,7 +68,9 @@ export class ChordDetector {
 	}
 
 	private _animate = (): void => {
-		this._update();
+		if (this._doc.synth.playing) {
+			this._update();
+		}
 		this._animationFrameId = window.requestAnimationFrame(this._animate);
 	}
 
@@ -80,19 +83,34 @@ export class ChordDetector {
 		if (this._lastChannel !== currentChannel) {
 			this._lastChannel = currentChannel;
 			this._lastText = "";
+			this._lastPart = -1;
 			this._renderHistory();
 		}
 
 		const isNoise = this._doc.song ? this._doc.song.getChannelIsNoise(currentChannel) : false;
 		const channel = this._doc.song ? this._doc.song.channels[currentChannel] : null;
 		const chName = channel && channel.name ? ` (${channel.name})` : "";
-		this._channelHeaderSpan.textContent = isNoise 
+		const headerText = isNoise 
 			? `🥁 Ch ${currentChannel + 1}${chName}:` 
 			: `🎹 Ch ${currentChannel + 1}${chName}:`;
+		if (this._channelHeaderSpan.textContent !== headerText) {
+			this._channelHeaderSpan.textContent = headerText;
+		}
 
 		if (isNoise) {
-			this._textSpan.textContent = "Rhythm";
+			if (this._textSpan.textContent !== "Rhythm") {
+				this._textSpan.textContent = "Rhythm";
+			}
 			return;
+		}
+
+		if (this._doc.synth.playing && this._doc.song) {
+			const partsPerBar = this._doc.song.beatsPerBar * Config.partsPerBeat;
+			const currentPart = Math.floor(this._doc.synth.playhead * partsPerBar);
+			if (currentPart === this._lastPart) {
+				return;
+			}
+			this._lastPart = currentPart;
 		}
 
 		const chordName = this._detectCurrentChannelChord(currentChannel);

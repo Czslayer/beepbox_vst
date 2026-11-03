@@ -11,6 +11,7 @@ export {ExportPrompt} from "./ExportPrompt.js";
 export {ChangePreset} from "./changes.js";
 export {fastFourierTransform, forwardRealFourierTransform, inverseRealFourierTransform} from "../synth/FFT.js";
 export {FilterCoefficients, FrequencyResponse, DynamicBiquadFilter} from "../synth/filtering.js";
+export {DiagnosticsLogger} from "../synth/DiagnosticsLogger.js";
 
 // To initialize:
 // new beepbox.SongEditor(document.getElementById("beepboxEditorContainer"));

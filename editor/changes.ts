@@ -2700,48 +2700,32 @@ export class ChangeNoteAdded extends UndoableChange {
 	private _pattern: Pattern;
 	private _note: Note;
 	private _index: number;
-	private _deletion: boolean;
 	constructor(doc: SongDocument, pattern: Pattern, note: Note, index: number, deletion: boolean = false) {
 		super(deletion);
 		this._doc = doc;
 		this._pattern = pattern;
 		this._note = note;
-		this._deletion = deletion;
 		this._index = index;
 		this._didSomething();
 		this.redo();
 	}
 	
 	protected _doForwards(): void {
-		if (this._deletion) {
-			const actualIndex: number = this._pattern.notes.indexOf(this._note);
-			if (actualIndex != -1) {
-				this._pattern.notes.splice(actualIndex, 1);
-			} else if (this._index >= 0 && this._index < this._pattern.notes.length) {
-				this._pattern.notes.splice(this._index, 1);
-			}
-		} else {
-			if (this._pattern.notes.indexOf(this._note) == -1) {
-				const insertIdx: number = Math.min(Math.max(0, this._index), this._pattern.notes.length);
-				this._pattern.notes.splice(insertIdx, 0, this._note);
-			}
+		const actualIndex: number = this._pattern.notes.indexOf(this._note);
+		if (actualIndex == -1) {
+			const insertIdx: number = Math.min(Math.max(0, this._index), this._pattern.notes.length);
+			this._pattern.notes.splice(insertIdx, 0, this._note);
 		}
 		this._doc.notifier.changed();
 	}
 	
 	protected _doBackwards(): void {
-		if (this._deletion) {
-			if (this._pattern.notes.indexOf(this._note) == -1) {
-				const insertIdx: number = Math.min(Math.max(0, this._index), this._pattern.notes.length);
-				this._pattern.notes.splice(insertIdx, 0, this._note);
-			}
-		} else {
-			const actualIndex: number = this._pattern.notes.indexOf(this._note);
-			if (actualIndex != -1) {
-				this._pattern.notes.splice(actualIndex, 1);
-			} else if (this._index >= 0 && this._index < this._pattern.notes.length) {
-				this._pattern.notes.splice(this._index, 1);
-			}
+		const actualIndex: number = this._pattern.notes.indexOf(this._note);
+		if (actualIndex != -1) {
+			this._index = actualIndex;
+			this._pattern.notes.splice(actualIndex, 1);
+		} else if (this._index >= 0 && this._index < this._pattern.notes.length) {
+			this._pattern.notes.splice(this._index, 1);
 		}
 		this._doc.notifier.changed();
 	}

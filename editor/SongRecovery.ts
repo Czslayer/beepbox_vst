@@ -2,6 +2,7 @@
 
 import {Dictionary} from "../synth/SynthConfig.js";
 import {Song} from "../synth/synth.js";
+import {DiagnosticsLogger} from "../synth/DiagnosticsLogger.js";
 
 export interface RecoveredVersion {
 	uid: string;
@@ -39,15 +40,10 @@ export function errorAlert(error: any): void {
 	const message: string = error?.message || String(error);
 	// Suppress error alert for range validation or note overlap scenarios
 	if (message.includes("not in range") || message.includes("Value ") || message.includes("corrupted") || message.includes("reading 'length'") || message.includes("Cannot read properties")) {
-		console.warn("Suppressed song data validation notice for overlapping notes:", message);
+		DiagnosticsLogger.logWarn("SongRecovery", "Suppressed song data validation notice for overlapping notes: " + message);
 		return;
 	}
-	console.error("[Corrupted Song Data Detailed Error]:", {
-		message: message,
-		stack: error?.stack,
-		rawError: error
-	});
-	console.warn("Song data corruption details: " + message);
+	DiagnosticsLogger.logCrash("SongRecovery.CorruptedSongData", error, { message });
 }
 
 function compareSongs(a: RecoveredSong, b: RecoveredSong): number {

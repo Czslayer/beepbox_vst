@@ -2,3 +2,4 @@
 
 export * from "./synth.js";
 export * from "./SoundFont.js";
+export * from "./DiagnosticsLogger.js";

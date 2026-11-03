@@ -210,7 +210,7 @@ export class PatternEditor {
 
 			if (candidates.length > 0) {
 				let bestDist: number = Number.MAX_VALUE;
-				let bestNote: Note | null = null;
+				let bestNote: Note = candidates[0];
 				for (const cand of candidates) {
 					for (const p of cand.pitches) {
 						const dist: number = Math.abs(p + 0.5 - mousePitch);
@@ -220,12 +220,8 @@ export class PatternEditor {
 						}
 					}
 				}
-				if (bestDist <= 2.0 && bestNote != null) {
-					this._cursor.curNote = bestNote;
-					this._cursor.curIndex = this._pattern.notes.indexOf(bestNote);
-				} else {
-					this._cursor.curNote = null;
-				}
+				this._cursor.curNote = bestNote;
+				this._cursor.curIndex = this._pattern.notes.indexOf(bestNote);
 			}
 		}
 		
@@ -443,11 +439,7 @@ export class PatternEditor {
 		if (this._doc.synth.playing && ((this._pattern != null && this._doc.song.getPattern(this._doc.channel, Math.floor(this._doc.synth.playhead)) == this._pattern) || Math.floor(this._doc.synth.playhead) == this._doc.bar + this._barOffset)) {
 			this._svgPlayhead.setAttribute("display", "");
 			const modPlayhead: number = this._doc.synth.playhead - playheadBar;
-			if (Math.abs(modPlayhead - this._playheadX) > 0.1) {
-				this._playheadX = modPlayhead;
-			} else {
-				this._playheadX += (modPlayhead - this._playheadX) * 0.2;
-			}
+			this._playheadX = modPlayhead;
 			this._svgPlayhead.setAttribute("x", "" + prettyNumber(this._playheadX * this._editorWidth - 2));
 		} else {
 			this._svgPlayhead.setAttribute("display", "none");
@@ -902,7 +894,8 @@ export class PatternEditor {
 					this._doc.record(sequence);
 				}
 			} else {
-				if (this._pattern == null) throw new Error();
+				const pattern: Pattern | null = this._pattern ?? this._doc.getCurrentPattern(this._barOffset);
+				if (pattern == null) throw new Error();
 				
 				const sequence: ChangeSequence = new ChangeSequence();
 				sequence.append(new ChangePatternSelection(this._doc, 0, 0));
@@ -920,9 +913,9 @@ export class PatternEditor {
 					}
 				} else {
 					if (this._cursor.curNote.pitches.length == 1) {
-						const noteIndex: number = this._pattern.notes.indexOf(this._cursor.curNote);
+						const noteIndex: number = pattern.notes.indexOf(this._cursor.curNote);
 						const deleteIndex: number = (noteIndex != -1) ? noteIndex : this._cursor.curIndex;
-						sequence.append(new ChangeNoteAdded(this._doc, this._pattern, this._cursor.curNote, deleteIndex, true));
+						sequence.append(new ChangeNoteAdded(this._doc, pattern, this._cursor.curNote, deleteIndex, true));
 					} else {
 						const pitchIndex: number = (this._cursor.pitchIndex != -1) ? this._cursor.pitchIndex : this._cursor.curNote.pitches.indexOf(this._cursor.pitch);
 						sequence.append(new ChangePitchAdded(this._doc, this._cursor.curNote, this._cursor.pitch, pitchIndex, true));

@@ -25,6 +25,17 @@ const PORT = 3000;
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'website')));
 
+app.post('/api/client-log', (req, res) => {
+  const { type, source, message, details, timestamp } = req.body || {};
+  const time = timestamp || new Date().toISOString();
+  if (type === 'crash') {
+    console.error(`[CLIENT CRASH ${time}] [${source || 'Client'}] ${message}`, details ? JSON.stringify(details) : '');
+  } else {
+    console.warn(`[CLIENT PERF ${time}] [${type}] [${source || 'Client'}] ${message}`, details ? JSON.stringify(details) : '');
+  }
+  res.json({ success: true });
+});
+
 const SYSTEM_PROMPT = `
 You are a world-class AI music composer and music producer for synthesizer and chiptune songs in BeepBox.
 Your task is to compose 8 NEW consecutive bars for a new song section (e.g. Chorus 2, Bridge, Solo, Verse 2, Outro) based on existing song context (Key, Scale, Tempo, Channels, and previous section phrasing/motifs/harmonies).

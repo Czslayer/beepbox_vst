@@ -161,7 +161,7 @@ const isMobile: boolean = matchMedia("(pointer:coarse)").matches;
 synth.anticipatePoorPerformance = isMobile;
 
 let titleText: HTMLHeadingElement = h1({style: "flex-grow: 1; margin: 0 1px;"}, "");
-let editLink: HTMLAnchorElement = a({target: "_top", style: "margin: 0 4px;"}, "✎ Edit");
+let editLink: HTMLAnchorElement = a({href: "javascript:void(0)", style: "margin: 0 4px;"}, "✎ Edit");
 let copyLink: HTMLAnchorElement = a({href: "javascript:void(0)", style: "margin: 0 4px;"}, "⎘ Copy URL");
 let shareLink: HTMLAnchorElement = a({href: "javascript:void(0)", style: "margin: 0 4px;"}, "⤳ Share");
 let fullscreenLink: HTMLAnchorElement = a({target: "_top", style: "margin: 0 4px;"}, "⇱ Fullscreen");
@@ -383,13 +383,17 @@ function setSynthVolume(): void {
 	synth.volume = Math.min(1.0, Math.pow(volume / 50.0, 0.5)) * Math.pow(2.0, (volume - 75.0) / 25.0);
 }
 
+let cachedContainerWidth: number = 0;
+
 function renderPlayhead(): void {
 	if (synth.song != null) {
-		let pos: number = synth.playhead / synth.song.barCount;
+		const pos: number = synth.playhead / synth.song.barCount;
 		playhead.style.left = (timelineWidth * pos) + "px";
 		
-		const boundingRect: ClientRect = visualizationContainer.getBoundingClientRect();
-		visualizationContainer.scrollLeft = pos * (timelineWidth - boundingRect.width);
+		if (cachedContainerWidth === 0) {
+			cachedContainerWidth = visualizationContainer.clientWidth;
+		}
+		visualizationContainer.scrollLeft = pos * (timelineWidth - cachedContainerWidth);
 	}
 }
 
@@ -398,6 +402,7 @@ function renderTimeline(): void {
 	if (synth.song == null) return;
 	
 	const boundingRect: ClientRect = visualizationContainer.getBoundingClientRect();
+	cachedContainerWidth = boundingRect.width;
 	
 	let timelineHeight: number;
 	let windowOctaves: number;
@@ -544,6 +549,27 @@ function onCopyClicked(): void {
 	if (!succeeded) window.prompt("Copy this:", location.href);
 }
 
+function onEditClicked(event: MouseEvent): void {
+	event.preventDefault();
+	const songString: string = synth.song ? synth.song.toBase64String() : "";
+	if (!songString) return;
+
+	let handledInParent: boolean = false;
+	if (window.parent && window.parent !== window) {
+		try {
+			window.parent.postMessage({ type: "beepboxLoadSong", song: songString }, "*");
+			handledInParent = true;
+		} catch (_) {}
+		try {
+			window.parent.location.hash = "#" + songString;
+			handledInParent = true;
+		} catch (_) {}
+	}
+	if (!handledInParent) {
+		location.href = "../#" + songString;
+	}
+}
+
 function onShareClicked(): void {
 	(<any>navigator).share({ url: location.href });
 }
@@ -578,6 +604,7 @@ playButton.addEventListener("click", onTogglePlay);
 loopButton.addEventListener("click", onToggleLoop);
 volumeSlider.addEventListener("input", onVolumeChange);
 zoomButton.addEventListener("click", onToggleZoom);
+editLink.addEventListener("click", onEditClicked);
 copyLink.addEventListener("click", onCopyClicked);
 shareLink.addEventListener("click", onShareClicked);
 window.addEventListener("hashchange", hashUpdatedExternally);

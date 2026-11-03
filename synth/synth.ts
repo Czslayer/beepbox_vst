@@ -5,6 +5,7 @@ import {scaleElementsByFactor, fastFourierTransform, forwardRealFourierTransform
 import {Deque} from "./Deque.js";
 import {FilterCoefficients, FrequencyResponse, DynamicBiquadFilter, warpInfinityToNyquist} from "./filtering.js";
 import {SoundFontRegistry, SoundFontPreset} from "./SoundFont.js";
+import {DiagnosticsLogger} from "./DiagnosticsLogger.js";
 
 declare global {
 	interface Window {
@@ -1926,12 +1927,19 @@ export class Channel {
 	public readonly patterns: Pattern[] = [];
 	public readonly bars: number[] = [];
 	public muted: boolean = false;
+	public subChannelsDirty: boolean = true;
 	
 	// Invisible sub monophonic channels (1 per polyphonic voice, up to 7 sub-channels)
 	public readonly subChannels: Channel[] = [];
 	public readonly mainVoicePatterns: Pattern[] = [];
 
+	public markSubChannelsDirty(): void {
+		this.subChannelsDirty = true;
+	}
+
 	public syncSubChannels(): void {
+		if (!this.subChannelsDirty) return;
+		this.subChannelsDirty = false;
 		const maxSubChannels = 7;
 		while (this.subChannels.length < maxSubChannels) {
 			const sub = new Channel();
@@ -2056,6 +2064,12 @@ export class Song {
 		}
 	}
 	
+	public markAllSubChannelsDirty(): void {
+		for (const channel of this.channels) {
+			if (channel != null) channel.markSubChannelsDirty();
+		}
+	}
+	
 	public getChannelCount(): number {
 		return this.pitchChannelCount + this.noiseChannelCount;
 	}
@@ -2148,6 +2162,7 @@ export class Song {
 			}
 			this.channels.length = this.getChannelCount();
 		}
+		this.markAllSubChannelsDirty();
 	}
 	
 	public toBase64String(): string {
@@ -3723,6 +3738,7 @@ export class Song {
 			} break;
 		}
 		
+		this.markAllSubChannelsDirty();
 		for (const channel of this.channels) {
 			channel.syncSubChannels();
 		}
@@ -3952,6 +3968,7 @@ export class Song {
 		this.channels.length = 0;
 		Array.prototype.push.apply(this.channels, newPitchChannels);
 		Array.prototype.push.apply(this.channels, newNoiseChannels);
+		this.markAllSubChannelsDirty();
 	}
 	
 	public getPattern(channelIndex: number, bar: number): Pattern | null {
@@ -5216,6 +5233,22 @@ export class Synth {
 	private isRecording: boolean = false;
 	private liveInputEndTime: number = 0.0;
 	private browserAutomaticallyClearsAudioBuffer: boolean = true; // Assume true until proven otherwise. Older Chrome does not clear the buffer so it needs to be cleared manually.
+	private lastAudioProcessTime: number = 0.0;
+	
+	private prevBufferStartTime: number = 0.0;
+	private prevBufferDuration: number = 0.0;
+	private prevBufferStartPlayhead: number = 0.0;
+	private prevBufferEndPlayhead: number = 0.0;
+	private currBufferStartTime: number = 0.0;
+	private currBufferDuration: number = 0.0;
+	private currBufferStartPlayhead: number = 0.0;
+	private currBufferEndPlayhead: number = 0.0;
+	private currBufferWallTime: number = 0.0;
+
+	private resetPlayheadInterpolation(): void {
+		this.prevBufferDuration = 0.0;
+		this.currBufferDuration = 0.0;
+	}
 	
 	public static readonly tempFilterStartCoefficients: FilterCoefficients = new FilterCoefficients();
 	public static readonly tempFilterEndCoefficients: FilterCoefficients = new FilterCoefficients();
@@ -5251,10 +5284,55 @@ export class Synth {
 	}
 	
 	public get playhead(): number {
-		return this.playheadInternal;
+		if (!this.isPlayingSong || this.song == null || this.countInMetronome) {
+			return this.playheadInternal;
+		}
+		
+		let fraction: number = 0.0;
+		let startPos: number = this.currBufferStartPlayhead;
+		let endPos: number = this.currBufferEndPlayhead;
+		
+		const audioNow: number = this.audioCtx ? this.audioCtx.currentTime : -1.0;
+		const wallNow: number = performance.now() / 1000.0;
+		
+		if (audioNow >= 0.0 && this.currBufferDuration > 0.0) {
+			if (this.prevBufferDuration > 0.0 && audioNow < this.currBufferStartTime) {
+				startPos = this.prevBufferStartPlayhead;
+				endPos = this.prevBufferEndPlayhead;
+				fraction = (audioNow - this.prevBufferStartTime) / this.prevBufferDuration;
+			} else {
+				startPos = this.currBufferStartPlayhead;
+				endPos = this.currBufferEndPlayhead;
+				fraction = (audioNow - this.currBufferStartTime) / this.currBufferDuration;
+			}
+		} else if (this.currBufferDuration > 0.0) {
+			const elapsed: number = wallNow - this.currBufferWallTime;
+			startPos = this.currBufferStartPlayhead;
+			endPos = this.currBufferEndPlayhead;
+			fraction = elapsed / this.currBufferDuration;
+		} else {
+			return this.playheadInternal;
+		}
+		
+		fraction = Math.max(0.0, Math.min(1.0, fraction));
+		
+		let delta: number = endPos - startPos;
+		if (delta < 0.0) {
+			const loopLength: number = (this.song.loopLength > 0) ? this.song.loopLength : this.song.barCount;
+			delta += loopLength;
+			let interp: number = startPos + delta * fraction;
+			const loopEnd: number = this.song.loopStart + loopLength;
+			if (interp >= loopEnd) {
+				interp -= loopLength;
+			}
+			return interp;
+		} else {
+			return startPos + delta * fraction;
+		}
 	}
 	
 	public set playhead(value: number) {
+		this.resetPlayheadInterpolation();
 		if (this.song != null) {
 			this.playheadInternal = Math.max(0, Math.min(this.song.barCount, value));
 			let remainder: number = this.playheadInternal;
@@ -5346,6 +5424,7 @@ export class Synth {
 	
 	public play(): void {
 		if (this.isPlayingSong) return;
+		this.resetPlayheadInterpolation();
 		this.isPlayingSong = true;
 		this.warmUpSynthesizer(this.song);
 		this.activateAudio();
@@ -5353,6 +5432,7 @@ export class Synth {
 	
 	public pause(): void {
 		if (!this.isPlayingSong) return;
+		this.resetPlayheadInterpolation();
 		this.isPlayingSong = false;
 		this.isRecording = false;
 	}
@@ -5364,17 +5444,20 @@ export class Synth {
 	}
 	
 	public snapToStart(): void {
+		this.resetPlayheadInterpolation();
 		this.bar = 0;
 		this.snapToBar();
 	}
 	
 	public goToBar(bar: number): void {
+		this.resetPlayheadInterpolation();
 		this.bar = bar;
 		this.playheadInternal = this.bar;
 		this.prevBar = null;
 	}
 	
 	public snapToBar(): void {
+		this.resetPlayheadInterpolation();
 		this.playheadInternal = this.bar;
 		this.beat = 0;
 		this.part = 0;
@@ -5399,6 +5482,7 @@ export class Synth {
 	public jumpIntoLoop(): void {
 		if (!this.song) return;
 		if (this.bar < this.song.loopStart || this.bar >= this.song.loopStart + this.song.loopLength) {
+			this.resetPlayheadInterpolation();
 			const oldBar: number = this.bar;
 			this.bar = this.song.loopStart;
 			this.playheadInternal += this.bar - oldBar;
@@ -5408,6 +5492,7 @@ export class Synth {
 	
 	public goToNextBar(): void {
 		if (!this.song) return;
+		this.resetPlayheadInterpolation();
 		this.prevBar = this.bar;
 		const oldBar: number = this.bar;
 		this.bar++;
@@ -5419,6 +5504,7 @@ export class Synth {
 	
 	public goToPrevBar(): void {
 		if (!this.song) return;
+		this.resetPlayheadInterpolation();
 		this.prevBar = null;
 		const oldBar: number = this.bar;
 		this.bar--;
@@ -5461,7 +5547,73 @@ export class Synth {
 		if (!this.isPlayingSong && performance.now() >= this.liveInputEndTime) {
 			this.deactivateAudio();
 		} else {
-			this.synthesize(outputDataL, outputDataR, outputBuffer.length, this.isPlayingSong);
+			const synthStartTime: number = performance.now();
+			const bufferDurationSec: number = outputBuffer.length / this.samplesPerSecond;
+			const bufferDurationMs: number = bufferDurationSec * 1000.0;
+			const playbackTime: number = (typeof audioProcessingEvent.playbackTime === "number" && audioProcessingEvent.playbackTime > 0)
+				? audioProcessingEvent.playbackTime
+				: (this.audioCtx ? this.audioCtx.currentTime : synthStartTime / 1000.0);
+
+			const samplesPerTick: number = this.getSamplesPerTick();
+			const startPlayhead: number = (this.song && this.isPlayingSong)
+				? (((this.tick + 1.0 - (this.tickSampleCountdown <= 0 ? samplesPerTick : this.tickSampleCountdown) / (samplesPerTick > 0 ? samplesPerTick : 1)) / 2.0 + this.part) / Config.partsPerBeat + this.beat) / this.song.beatsPerBar + this.bar
+				: this.playheadInternal;
+
+			if (this.lastAudioProcessTime > 0.0) {
+				const intervalMs: number = synthStartTime - this.lastAudioProcessTime;
+				if (intervalMs > bufferDurationMs * 1.6 && intervalMs < 3000.0) {
+					DiagnosticsLogger.logAudioJitter(intervalMs, bufferDurationMs);
+				}
+			}
+			this.lastAudioProcessTime = synthStartTime;
+
+			try {
+				this.synthesize(outputDataL, outputDataR, outputBuffer.length, this.isPlayingSong);
+				if (this.isPlayingSong && this.song != null) {
+					this.prevBufferStartTime = this.currBufferStartTime;
+					this.prevBufferDuration = this.currBufferDuration;
+					this.prevBufferStartPlayhead = this.currBufferStartPlayhead;
+					this.prevBufferEndPlayhead = this.currBufferEndPlayhead;
+
+					this.currBufferStartTime = playbackTime;
+					this.currBufferDuration = bufferDurationSec;
+					this.currBufferStartPlayhead = startPlayhead;
+					this.currBufferEndPlayhead = this.playheadInternal;
+					this.currBufferWallTime = synthStartTime / 1000.0;
+				}
+			} catch (error) {
+				DiagnosticsLogger.logCrash("AudioSynthesis", error, {
+					bar: this.bar,
+					beat: this.beat,
+					part: this.part,
+					tick: this.tick,
+					isPlayingSong: this.isPlayingSong,
+					channelCount: this.song ? this.song.getChannelCount() : 0
+				});
+				// Mute output buffer to prevent loud burst of digital noise
+				for (let i: number = 0; i < outputBuffer.length; i++) {
+					outputDataL[i] = 0.0;
+					outputDataR[i] = 0.0;
+				}
+			}
+
+			const synthDurationMs: number = performance.now() - synthStartTime;
+			if (synthDurationMs > bufferDurationMs * 0.85) {
+				let activeTonesCount: number = 0;
+				if (this.channels) {
+					for (let c: number = 0; c < this.channels.length; c++) {
+						for (let inst: number = 0; inst < this.channels[c].instruments.length; inst++) {
+							activeTonesCount += this.channels[c].instruments[inst].activeTones.count();
+						}
+					}
+				}
+				DiagnosticsLogger.logAudioPerformance(synthDurationMs, bufferDurationMs, {
+					bar: this.bar,
+					activeTones: activeTonesCount,
+					channelCount: this.song ? this.song.getChannelCount() : 0,
+					isPlayingSong: this.isPlayingSong
+				});
+			}
 		}
 	}
 	
